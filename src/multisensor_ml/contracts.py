@@ -7,7 +7,7 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ORACLE_LATENT_FACTORS: tuple[str, ...] = (
     "autonomic_arousal",
@@ -47,6 +47,48 @@ class DatasetRecord(BaseModel):
     schema_version: str = Field(min_length=1)
     logical_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     split_role: SplitRole
+
+
+class SynchronizationRecord(BaseModel):
+    """Public future-device alignment schema with a fail-closed oracle state."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dataset_id: str = Field(min_length=1)
+    session_id: str | None
+    person_key: str | None
+    device_pair: str | None
+    reference_device: Literal["Polar H10"]
+    offset_ms: float | None
+    drift_ppm: float | None
+    jitter_ms: float | None = Field(default=None, ge=0)
+    physiological_lag_ms: float | None
+    overlap_sec: float | None = Field(default=None, ge=0)
+    correlation: float | None = Field(default=None, ge=-1, le=1)
+    corrected_time_axis: Literal["UTC"]
+    watch_ecg_policy: Literal["calibration_only"]
+    status: Literal[
+        "ALIGNED",
+        "REVIEW_REQUIRED",
+        "INSUFFICIENT_OVERLAP",
+        "NOT_AVAILABLE_TRUTH_ONLY",
+    ]
+
+    @model_validator(mode="after")
+    def truth_only_has_no_measurements(self) -> SynchronizationRecord:
+        measurements = (
+            self.offset_ms,
+            self.drift_ppm,
+            self.jitter_ms,
+            self.physiological_lag_ms,
+            self.overlap_sec,
+            self.correlation,
+        )
+        if self.status == "NOT_AVAILABLE_TRUTH_ONLY" and any(
+            value is not None for value in measurements
+        ):
+            raise ValueError("truth-only synchronization must not invent measurements")
+        return self
 
 
 def assign_person_splits(people: Iterable[tuple[str, str]]) -> dict[tuple[str, str], SplitRole]:

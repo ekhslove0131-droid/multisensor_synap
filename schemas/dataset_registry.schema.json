@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "goal1.5/dataset-registry/v1",
+  "title": "Goal 1.5 Dataset Registry Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dataset_id",
+    "source_domain",
+    "generator_commit",
+    "config_sha256",
+    "run_id",
+    "person_key",
+    "time_column",
+    "schema_version",
+    "logical_hash",
+    "split_role"
+  ],
+  "properties": {
+    "dataset_id": {"type": "string", "minLength": 1},
+    "source_domain": {
+      "enum": ["synthetic_truth_oracle", "real_observed"]
+    },
+    "generator_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "config_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "run_id": {"type": "string", "minLength": 1},
+    "person_key": {"type": "string", "minLength": 1},
+    "time_column": {"type": "string", "minLength": 1},
+    "schema_version": {"type": "string", "minLength": 1},
+    "logical_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "split_role": {
+      "enum": ["train", "validation", "locked_test"]
+    }
+  }
+}

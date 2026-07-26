@@ -9,6 +9,7 @@ from multisensor_ml.contracts import (
     FORBIDDEN_ORACLE_EXACT,
     ORACLE_LATENT_FACTORS,
     DatasetRecord,
+    SynchronizationRecord,
     assert_oracle_columns,
     assign_person_splits,
     build_labels,
@@ -90,3 +91,28 @@ def test_dataset_record_requires_lineage_and_split_contract() -> None:
     assert record.split_role == "train"
     with pytest.raises(ValueError):
         DatasetRecord.model_validate({**record.model_dump(), "split_role": "test"})
+
+
+def test_oracle_synchronization_cannot_invent_device_measurements() -> None:
+    record = SynchronizationRecord(
+        dataset_id="synthetic-oracle",
+        session_id=None,
+        person_key=None,
+        device_pair=None,
+        reference_device="Polar H10",
+        offset_ms=None,
+        drift_ppm=None,
+        jitter_ms=None,
+        physiological_lag_ms=None,
+        overlap_sec=None,
+        correlation=None,
+        corrected_time_axis="UTC",
+        watch_ecg_policy="calibration_only",
+        status="NOT_AVAILABLE_TRUTH_ONLY",
+    )
+    assert record.status == "NOT_AVAILABLE_TRUTH_ONLY"
+
+    with pytest.raises(ValueError, match="must not invent"):
+        SynchronizationRecord.model_validate(
+            {**record.model_dump(), "offset_ms": 3.5}
+        )

@@ -12,6 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import skops.io as sio
 
+from multisensor_ml.contracts import SynchronizationRecord
 from multisensor_ml.models import ProbabilityClassifier
 from multisensor_ml.registry import sha256_file
 
@@ -90,22 +91,22 @@ def write_model_bundle(
     if synchronization is None:
         synchronization = pd.DataFrame(
             [
-                {
-                    "dataset_id": "synthetic_truth_oracle",
-                    "session_id": None,
-                    "person_key": None,
-                    "device_pair": None,
-                    "reference_device": "Polar H10",
-                    "offset_ms": None,
-                    "drift_ppm": None,
-                    "jitter_ms": None,
-                    "physiological_lag_ms": None,
-                    "overlap_sec": None,
-                    "correlation": None,
-                    "corrected_time_axis": "UTC",
-                    "watch_ecg_policy": "calibration_only",
-                    "status": "NOT_AVAILABLE_TRUTH_ONLY",
-                }
+                SynchronizationRecord(
+                    dataset_id="synthetic_truth_oracle",
+                    session_id=None,
+                    person_key=None,
+                    device_pair=None,
+                    reference_device="Polar H10",
+                    offset_ms=None,
+                    drift_ppm=None,
+                    jitter_ms=None,
+                    physiological_lag_ms=None,
+                    overlap_sec=None,
+                    correlation=None,
+                    corrected_time_axis="UTC",
+                    watch_ecg_policy="calibration_only",
+                    status="NOT_AVAILABLE_TRUTH_ONLY",
+                ).model_dump()
             ]
         )
     _write_parquet(synchronization, root / "synchronization.parquet")

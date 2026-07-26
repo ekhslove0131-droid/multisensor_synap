@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "goal1.5/synchronization/v1",
+  "title": "Goal 1.5 Future Device Synchronization Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dataset_id",
+    "session_id",
+    "person_key",
+    "device_pair",
+    "reference_device",
+    "offset_ms",
+    "drift_ppm",
+    "jitter_ms",
+    "physiological_lag_ms",
+    "overlap_sec",
+    "correlation",
+    "corrected_time_axis",
+    "watch_ecg_policy",
+    "status"
+  ],
+  "properties": {
+    "dataset_id": {"type": "string", "minLength": 1},
+    "session_id": {"type": ["string", "null"]},
+    "person_key": {"type": ["string", "null"]},
+    "device_pair": {"type": ["string", "null"]},
+    "reference_device": {"const": "Polar H10"},
+    "offset_ms": {"type": ["number", "null"]},
+    "drift_ppm": {"type": ["number", "null"]},
+    "jitter_ms": {"type": ["number", "null"], "minimum": 0},
+    "physiological_lag_ms": {"type": ["number", "null"]},
+    "overlap_sec": {"type": ["number", "null"], "minimum": 0},
+    "correlation": {
+      "type": ["number", "null"],
+      "minimum": -1,
+      "maximum": 1
+    },
+    "corrected_time_axis": {"const": "UTC"},
+    "watch_ecg_policy": {"const": "calibration_only"},
+    "status": {
+      "enum": [
+        "ALIGNED",
+        "REVIEW_REQUIRED",
+        "INSUFFICIENT_OVERLAP",
+        "NOT_AVAILABLE_TRUTH_ONLY"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {"const": "NOT_AVAILABLE_TRUTH_ONLY"}
+        }
+      },
+      "then": {
+        "properties": {
+          "offset_ms": {"type": "null"},
+          "drift_ppm": {"type": "null"},
+          "jitter_ms": {"type": "null"},
+          "physiological_lag_ms": {"type": "null"},
+          "overlap_sec": {"type": "null"},
+          "correlation": {"type": "null"}
+        }
+      }
+    }
+  ]
+}
