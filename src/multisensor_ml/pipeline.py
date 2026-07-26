@@ -346,10 +346,10 @@ def train_prepared(
     )
     feature_names = cast(list[str], manifest["feature_names"])
     entries = cast(list[dict[str, object]], manifest["people"])
-    train_people = _read_people(prepared_root, entries, "train")
     validation_people = _read_people(prepared_root, entries, "validation")
     test_people = _read_people(prepared_root, entries, "locked_test")
-    if not train_people or not validation_people or not test_people:
+    train_entries = [entry for entry in entries if entry["split_role"] == "train"]
+    if not train_entries or not validation_people or not test_people:
         raise ValueError("train, validation, and locked_test people are all required")
 
     models: dict[ModelKey, ProbabilityClassifier] = {}
@@ -359,7 +359,8 @@ def train_prepared(
     pr_frames: list[pd.DataFrame] = []
     for target in TARGETS:
         training_frames: list[pd.DataFrame] = []
-        for _, frame in train_people:
+        for entry in train_entries:
+            frame = pq.read_table(prepared_root / str(entry["path"])).to_pandas()
             selected = select_training_rows(frame, target=target)
             training_frames.append(frame.loc[selected])
         training = pd.concat(training_frames, ignore_index=True)
