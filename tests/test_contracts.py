@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pandas as pd
+import pytest
+
+from multisensor_ml.contracts import (
+    FORBIDDEN_ORACLE_EXACT,
+    ORACLE_LATENT_FACTORS,
+    DatasetRecord,
+    assert_oracle_columns,
+    assign_person_splits,
+    build_labels,
+)
+
+
+def test_split_is_person_grouped_deterministic_and_24_6_6() -> None:
+    people = [(f"run-{run}", f"person-{person:02d}") for run in range(3) for person in range(12)]
+
+    first = assign_person_splits(people)
+    second = assign_person_splits(list(reversed(people)))
+
+    assert first == second
+    assert list(first.values()).count("train") == 24
+    assert list(first.values()).count("validation") == 6
+    assert list(first.values()).count("locked_test") == 6
+    assert len(first) == len(set(first)) == 36
+
+
+def test_oracle_contract_accepts_whitelist_and_rejects_truth_leakage() -> None:
+    allowed = [
+        "timestamp_utc",
+        "person_id",
+        *ORACLE_LATENT_FACTORS,
+        "is_awake",
+        "context",
+    ]
+    assert_oracle_columns(allowed)
+
+    for forbidden in sorted(FORBIDDEN_ORACLE_EXACT):
+        with pytest.raises(ValueError, match="truth leakage"):
+            assert_oracle_columns([*allowed, forbidden])
+
+    with pytest.raises(ValueError, match="truth leakage"):
+        assert_oracle_columns([*allowed, "active_target_event_binary"])
+
+
+def test_event_and_forecast_label_boundaries_are_independent_of_latent_rows() -> None:
+    timeline = pd.DataFrame(
+        {
+            "timestamp_utc": pd.date_range(
+                datetime(2026, 1, 1, tzinfo=UTC), periods=130, freq="s"
+            )
+        }
+    )
+    events = pd.DataFrame(
+        {
+            "event_id": ["event-1"],
+            "onset_utc": [datetime(2026, 1, 1, 0, 1, 0, tzinfo=UTC)],
+            "end_utc": [datetime(2026, 1, 1, 0, 1, 10, tzinfo=UTC)],
+        }
+    )
+
+    labels = build_labels(timeline, events)
+
+    assert labels.loc[0:59, "forecast_60s"].eq(1).all()
+    assert labels.loc[60, "forecast_60s"] == 0
+    assert labels.loc[59, "event_binary"] == 0
+    assert labels.loc[60:70, "event_binary"].eq(1).all()
+    assert labels.loc[71, "event_binary"] == 0
+    assert labels.loc[60, "phase"] == "event"
+    assert labels.loc[0, "phase"] == "forecast"
+
+
+def test_dataset_record_requires_lineage_and_split_contract() -> None:
+    record = DatasetRecord(
+        dataset_id="dataset-abc",
+        source_domain="synthetic_truth_oracle",
+        generator_commit="a" * 40,
+        config_sha256="b" * 64,
+        run_id="run-1",
+        person_key="run-1/person-01",
+        time_column="timestamp_utc",
+        schema_version="goal1.5/v1",
+        logical_hash="c" * 64,
+        split_role="train",
+    )
+
+    assert record.split_role == "train"
+    with pytest.raises(ValueError):
+        DatasetRecord.model_validate({**record.model_dump(), "split_role": "test"})

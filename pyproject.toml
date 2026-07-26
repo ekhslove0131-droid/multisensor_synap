@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "multisensor-ml"
+version = "0.1.0"
+description = "Goal 1.5 oracle/sanity ML pipeline for multisensor synthetic truth"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "multisensor-synth",
+  "numpy>=2.2,<3",
+  "pandas>=2.2,<4",
+  "pyarrow>=19,<26",
+  "pydantic>=2.12,<3",
+  "PyYAML>=6.0,<7",
+  "scikit-learn>=1.7,<2",
+  "skops>=0.13,<1",
+]
+
+[project.scripts]
+multisensor-ml = "multisensor_ml.cli:main"
+
+[dependency-groups]
+dev = [
+  "hypothesis>=6.130,<7",
+  "mypy>=1.15,<2",
+  "pandas-stubs>=2.2,<4",
+  "pytest>=8.3,<10",
+  "ruff>=0.11,<1",
+  "types-PyYAML>=6.0,<7",
+]
+
+[tool.uv.sources]
+multisensor-synth = { path = "../multisensor_synth", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/multisensor_ml"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["multisensor_ml"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*", "skops", "skops.*", "sklearn", "sklearn.*"]
+ignore_missing_imports = true
