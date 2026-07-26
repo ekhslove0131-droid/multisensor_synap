@@ -56,3 +56,15 @@ forecast의 mean/median detected lead time은 네 clean model/role 조합에서 
 
 따라서 반복 개발은 quick → clean candidate selection → 필요한 후보만 full stress
 순서가 적합하다. full stress checkpoint/cache 분리는 다음 성능 개선 우선순위다.
+
+## KNIME 5.12 readback
+
+- official Big Data File Formats와 External Tool Support 확장 설치: 완료
+- External Tool quick materialization과 PASS 출력: 완료
+- 6개 Parquet 화면 실행: 완료
+- `.knwf` export 후 별도 `Goal1_5_Readback_2` 폴더 import: 완료
+- imported workflow Execute all 및 Composite View readback: 완료
+- real observed accuracy/synchronization: **NOT VERIFIED**
+
+화면 증거는 `docs/evidence/`에 저장했다. 이 검증은 KNIME 연결과
+oracle/sanity 결과 표시가 재현된다는 뜻이며 실제 센서 성능 검증은 아니다.

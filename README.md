@@ -64,6 +64,8 @@ dataset hash 조합은 두 번 실행할 수 없습니다.
 
 상세 내용은 [아키텍처](docs/ARCHITECTURE.md),
 [KNIME 사용법](docs/KNIME.md), [MVP 결과](docs/RESULTS_MVP3.md)를 참고하세요.
+KNIME 5.12에서 바로 가져올 파일은
+[Multisensor_ML_Goal1_5.knwf](knime/Multisensor_ML_Goal1_5.knwf)입니다.
 
 ## 안전한 번들
 
