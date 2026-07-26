@@ -1,0 +1,14 @@
+schema_version: goal1.5/config/v1
+series_id: quick12-oracle-v1
+experiment_id: quick12-oracle-v1
+generator_config: ../../multisensor_synth/configs/quick.yaml
+seeds: [20260725]
+generator_overrides:
+  run:
+    duration_sec: 7200
+    duration_days: null
+    participant_count: 12
+data_root: ../data
+artifact_root: ../artifacts
+random_state: 20260725
+locked_test_audit_reason: Goal 1.5 quick integration acceptance

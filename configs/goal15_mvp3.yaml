@@ -1,0 +1,10 @@
+schema_version: goal1.5/config/v1
+series_id: mvp3-oracle-v1
+experiment_id: mvp3-oracle-v1
+generator_config: ../../multisensor_synth/configs/mvp.yaml
+seeds: [20260725, 20260726, 20260727]
+generator_overrides: {}
+data_root: ../data
+artifact_root: ../artifacts
+random_state: 20260725
+locked_test_audit_reason: Goal 1.5 MVP three-seed acceptance

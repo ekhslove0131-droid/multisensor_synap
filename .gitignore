@@ -9,10 +9,13 @@ __pycache__/
 *.py[cod]
 data/raw/
 data/prepared/
+data/registry/
+data/audit/
 artifacts/
 output/
 reports/generated/
 knime/workspace/
+knime/exports/
 *.pkl
 *.pickle
 *.joblib
