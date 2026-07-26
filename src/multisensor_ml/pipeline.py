@@ -15,7 +15,11 @@ from sklearn.metrics import precision_recall_curve
 from multisensor_ml.baseline import fit_global_baseline, personalize_baseline
 from multisensor_ml.bundle import ModelKey, load_model_bundle, write_model_bundle
 from multisensor_ml.features import build_causal_features
-from multisensor_ml.metrics import evaluate_probabilities, select_event_threshold
+from multisensor_ml.metrics import (
+    evaluate_probabilities,
+    forecast_lead_times,
+    select_event_threshold,
+)
 from multisensor_ml.models import (
     ProbabilityClassifier,
     fit_candidate_models,
@@ -233,6 +237,7 @@ def _evaluate_people(
     retained: list[pd.DataFrame] = []
     person_recall: list[float] = []
     person_f1: list[float] = []
+    lead_times: list[int] = []
     for entry, frame in people:
         feature_values = frame[feature_names].to_numpy(dtype=np.float32)
         truth = frame[target].to_numpy(dtype=np.int8)
@@ -247,6 +252,14 @@ def _evaluate_people(
         )
         person_recall.append(float(cast(float, person_metrics["row_recall"])))
         person_f1.append(float(cast(float, person_metrics["row_f1"])))
+        if target == "forecast_60s":
+            lead_times.extend(
+                forecast_lead_times(
+                    truth,
+                    probability.astype(np.float64),
+                    threshold=threshold,
+                )
+            )
         keep = (
             (np.arange(len(frame)) % 60 == 0)
             | truth.astype(bool)
@@ -277,6 +290,14 @@ def _evaluate_people(
     )
     metrics["person_macro_recall"] = float(np.mean(person_recall))
     metrics["person_macro_f1"] = float(np.mean(person_f1))
+    if target == "forecast_60s":
+        metrics["forecast_mean_lead_time_sec"] = (
+            float(np.mean(lead_times)) if lead_times else 0.0
+        )
+        metrics["forecast_median_lead_time_sec"] = (
+            float(np.median(lead_times)) if lead_times else 0.0
+        )
+        metrics["forecast_detected_events"] = len(lead_times)
     return metrics, retained
 
 
@@ -611,3 +632,57 @@ def evaluate_prepared_bundle(
             audit_reason=cast(str, audit_reason),
         )
     return report
+
+
+def upgrade_bundle_forecast_lead_metrics(bundle_root: Path) -> int:
+    """Add forecast lead-time rows to a pre-upgrade bundle and refresh its file hash."""
+
+    metrics_path = bundle_root / "metrics.parquet"
+    predictions_path = bundle_root / "predictions.parquet"
+    metrics = pq.read_table(metrics_path).to_pandas()
+    predictions = pq.read_table(predictions_path).to_pandas()
+    existing = set(metrics["metric"].astype(str))
+    if "forecast_mean_lead_time_sec" in existing:
+        return 0
+
+    additions: list[dict[str, object]] = []
+    forecast = predictions.loc[predictions["target"] == "forecast_60s"].copy()
+    for (model_name, role), group in forecast.groupby(["model_name", "role"]):
+        leads: list[int] = []
+        for _, person in group.groupby("person_key"):
+            person = person.sort_values("timestamp_utc")
+            leads.extend(
+                forecast_lead_times(
+                    person["truth"].to_numpy(dtype=np.int8),
+                    person["probability"].to_numpy(dtype=np.float64),
+                    threshold=float(person["threshold"].iloc[0]),
+                )
+            )
+        threshold = float(group["threshold"].iloc[0])
+        values = {
+            "forecast_mean_lead_time_sec": float(np.mean(leads)) if leads else 0.0,
+            "forecast_median_lead_time_sec": float(np.median(leads)) if leads else 0.0,
+            "forecast_detected_events": float(len(leads)),
+        }
+        for metric, value in values.items():
+            additions.append(
+                {
+                    "target": "forecast_60s",
+                    "model_name": str(model_name),
+                    "role": str(role),
+                    "scenario": "clean",
+                    "metric": metric,
+                    "value": value,
+                    "threshold": threshold,
+                    "degradation": None,
+                }
+            )
+    _write_parquet(pd.concat([metrics, pd.DataFrame(additions)]), metrics_path)
+    manifest_path = bundle_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["metrics.parquet"] = sha256_file(metrics_path)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return len(additions)

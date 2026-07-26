@@ -122,6 +122,8 @@ def test_prepare_train_bundle_reload_full_goal15_path(tmp_path: Path) -> None:
         "calibration_error",
         "event_recall",
         "false_alerts_per_hour",
+        "forecast_mean_lead_time_sec",
+        "forecast_median_lead_time_sec",
     }.issubset(set(metrics["metric"]))
     sync = pq.read_table(bundle / "synchronization.parquet").to_pandas()
     assert sync["status"].tolist() == ["NOT_AVAILABLE_TRUTH_ONLY"]

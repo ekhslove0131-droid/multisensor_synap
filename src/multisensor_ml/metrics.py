@@ -32,6 +32,23 @@ def _event_counts(
     return detected, len(truth_events) - detected, false_alerts
 
 
+def forecast_lead_times(
+    truth: NDArray[np.int8],
+    probability: NDArray[np.float64],
+    *,
+    threshold: float,
+) -> list[int]:
+    """Return seconds from the first alert in each forecast block to its onset."""
+
+    predicted = probability >= threshold
+    leads: list[int] = []
+    for start, end in _segments(truth.astype(bool)):
+        alerts = np.flatnonzero(predicted[start : end + 1])
+        if len(alerts):
+            leads.append(end - (start + int(alerts[0])) + 1)
+    return leads
+
+
 def expected_calibration_error(
     truth: NDArray[np.int8],
     probability: NDArray[np.float64],

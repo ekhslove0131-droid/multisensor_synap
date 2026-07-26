@@ -3,7 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from multisensor_ml.metrics import evaluate_probabilities, select_event_threshold
+from multisensor_ml.metrics import (
+    evaluate_probabilities,
+    forecast_lead_times,
+    select_event_threshold,
+)
 from multisensor_ml.models import fit_candidate_models, select_training_rows
 
 
@@ -63,3 +67,12 @@ def test_validation_threshold_optimizes_event_f1_and_reports_false_alerts() -> N
     assert metrics["false_alerts_per_hour"] == 0.0
     assert 0 <= metrics["brier_score"] <= 1
     assert 0 <= metrics["calibration_error"] <= 1
+
+
+def test_forecast_lead_time_is_measured_from_first_alert_to_onset() -> None:
+    truth = np.array([0, 1, 1, 1, 0, 1, 1, 0], dtype=np.int8)
+    probability = np.array([0.1, 0.2, 0.8, 0.9, 0.1, 0.7, 0.8, 0.1])
+
+    leads = forecast_lead_times(truth, probability, threshold=0.5)
+
+    assert leads == [2, 2]
