@@ -1,0 +1,15 @@
+{
+  "config_sha256": "be620d55349af4d8afd8cc25bec07568a34f4104a08670315ea7c111919d5d55",
+  "events_logical_sha256": "b3d85b86b31f405ac009d3fc6660d9fa39b26f6e0a94155cf918af6cae59e8c9",
+  "latent_factor_means": {
+    "autonomic_arousal": 0.36248897,
+    "cognitive_load": 0.30107095,
+    "motor_activation": 0.33694821,
+    "recovery_capacity": 0.31822158,
+    "sensory_context": 0.32924002,
+    "sleep_pressure": 0.40531753,
+    "social_context": 0.32859323
+  },
+  "participants_logical_sha256": "a90a5a91be14bd0d6a9b2917ee5f670cb4300f2714d98449f57a437f4998f9a1",
+  "truth_logical_sha256": "36056a3640c42240d225928b6abd0f08d9fa6967e8adca8a19d34cdc9a96d51f"
+}

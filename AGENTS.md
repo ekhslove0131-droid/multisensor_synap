@@ -1,0 +1,7 @@
+- Start with docs/project/00_PROJECT_INDEX.md.
+- Follow the current Goal prompt under docs/planning/.
+- Do not change fixed device, timeline, label, or layer contracts.
+- Keep truth, observed, and model_ready strictly separated.
+- Do not implement apps, device SDK integration, LLMs, or medical judgment.
+- Run the required tests before claiming completion.
+- Preserve unrelated user changes.

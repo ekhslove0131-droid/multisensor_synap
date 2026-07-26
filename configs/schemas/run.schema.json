@@ -1,0 +1,2003 @@
+{
+  "$defs": {
+    "AccelerometerArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "bias_std_g": {
+          "minimum": 0,
+          "title": "Bias Std G",
+          "type": "number"
+        },
+        "clipping_probability_per_hour": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Clipping Probability Per Hour",
+          "type": "number"
+        },
+        "scale_error_std": {
+          "minimum": 0,
+          "title": "Scale Error Std",
+          "type": "number"
+        }
+      },
+      "required": [
+        "bias_std_g",
+        "scale_error_std",
+        "clipping_probability_per_hour"
+      ],
+      "title": "AccelerometerArtifacts",
+      "type": "object"
+    },
+    "AccelerometerStream": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_ranges_g": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Ranges G"
+        },
+        "allowed_sample_rates_hz": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Sample Rates Hz"
+        },
+        "axes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Axes",
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode"
+        },
+        "range_g": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Range G"
+        },
+        "sample_rate_hz": {
+          "title": "Sample Rate Hz",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sample_rate_hz",
+        "axes"
+      ],
+      "title": "AccelerometerStream",
+      "type": "object"
+    },
+    "ActivityConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "daily_bouts": {
+          "$ref": "#/$defs/RangeInt"
+        }
+      },
+      "required": [
+        "daily_bouts"
+      ],
+      "title": "ActivityConfig",
+      "type": "object"
+    },
+    "ArchetypeProbabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "autonomic_first": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Autonomic First",
+          "type": "number"
+        },
+        "eeg_first": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Eeg First",
+          "type": "number"
+        },
+        "motor_dominant": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Motor Dominant",
+          "type": "number"
+        },
+        "motor_first": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Motor First",
+          "type": "number"
+        },
+        "non_responder": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Non Responder",
+          "type": "number"
+        },
+        "partial_response": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Partial Response",
+          "type": "number"
+        },
+        "quiet_internal": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Quiet Internal",
+          "type": "number"
+        }
+      },
+      "required": [
+        "eeg_first",
+        "autonomic_first",
+        "motor_first",
+        "quiet_internal",
+        "motor_dominant",
+        "partial_response",
+        "non_responder"
+      ],
+      "title": "ArchetypeProbabilities",
+      "type": "object"
+    },
+    "ArtifactsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "accelerometer": {
+          "$ref": "#/$defs/AccelerometerArtifacts"
+        },
+        "clocks": {
+          "$ref": "#/$defs/ClockArtifacts"
+        },
+        "ecg": {
+          "$ref": "#/$defs/EcgArtifacts"
+        },
+        "eda": {
+          "$ref": "#/$defs/EdaArtifacts"
+        },
+        "eeg": {
+          "$ref": "#/$defs/EegArtifacts"
+        },
+        "global": {
+          "$ref": "#/$defs/GlobalArtifacts"
+        },
+        "ppg": {
+          "$ref": "#/$defs/PpgArtifacts"
+        }
+      },
+      "required": [
+        "global",
+        "clocks",
+        "eeg",
+        "ecg",
+        "ppg",
+        "eda",
+        "accelerometer"
+      ],
+      "title": "ArtifactsConfig",
+      "type": "object"
+    },
+    "AuxStream": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "AuxStream",
+      "type": "object"
+    },
+    "BaselineProfiles": {
+      "additionalProperties": false,
+      "properties": {
+        "cardiac": {
+          "$ref": "#/$defs/CardiacBaseline"
+        },
+        "eda": {
+          "$ref": "#/$defs/EdaBaseline"
+        },
+        "eeg": {
+          "$ref": "#/$defs/EegBaseline"
+        },
+        "recovery_capacity": {
+          "$ref": "#/$defs/BetaDistribution"
+        }
+      },
+      "required": [
+        "cardiac",
+        "eeg",
+        "eda",
+        "recovery_capacity"
+      ],
+      "title": "BaselineProfiles",
+      "type": "object"
+    },
+    "BetaDistribution": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": {
+          "exclusiveMinimum": 0,
+          "title": "Alpha",
+          "type": "number"
+        },
+        "beta": {
+          "exclusiveMinimum": 0,
+          "title": "Beta",
+          "type": "number"
+        },
+        "distribution": {
+          "const": "beta",
+          "title": "Distribution",
+          "type": "string"
+        }
+      },
+      "required": [
+        "distribution",
+        "alpha",
+        "beta"
+      ],
+      "title": "BetaDistribution",
+      "type": "object"
+    },
+    "CardiacBaseline": {
+      "additionalProperties": false,
+      "properties": {
+        "resting_hr_bpm": {
+          "$ref": "#/$defs/TruncatedNormal"
+        },
+        "rmssd_ms": {
+          "$ref": "#/$defs/LogNormal"
+        }
+      },
+      "required": [
+        "resting_hr_bpm",
+        "rmssd_ms"
+      ],
+      "title": "CardiacBaseline",
+      "type": "object"
+    },
+    "CategoryProbabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "categories": {
+          "items": {
+            "enum": [
+              "female",
+              "male"
+            ],
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
+        },
+        "probabilities": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Probabilities",
+          "type": "array"
+        }
+      },
+      "required": [
+        "categories",
+        "probabilities"
+      ],
+      "title": "CategoryProbabilities",
+      "type": "object"
+    },
+    "CircadianConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "amplitude_variation": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Amplitude Variation",
+          "type": "number"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "amplitude_variation"
+      ],
+      "title": "CircadianConfig",
+      "type": "object"
+    },
+    "ClipWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "post_sec": {
+          "minimum": 0,
+          "title": "Post Sec",
+          "type": "integer"
+        },
+        "pre_sec": {
+          "minimum": 0,
+          "title": "Pre Sec",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pre_sec",
+        "post_sec"
+      ],
+      "title": "ClipWindow",
+      "type": "object"
+    },
+    "ClockArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "drift_ppm": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RangeInt"
+          },
+          "propertyNames": {
+            "enum": [
+              "muse_s",
+              "polar_h10",
+              "galaxy_watch8"
+            ]
+          },
+          "title": "Drift Ppm",
+          "type": "object"
+        },
+        "initial_offset_ms": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RangeInt"
+          },
+          "propertyNames": {
+            "enum": [
+              "muse_s",
+              "polar_h10",
+              "galaxy_watch8"
+            ]
+          },
+          "title": "Initial Offset Ms",
+          "type": "object"
+        },
+        "jitter_ms_std": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "propertyNames": {
+            "enum": [
+              "muse_s",
+              "polar_h10",
+              "galaxy_watch8"
+            ]
+          },
+          "title": "Jitter Ms Std",
+          "type": "object"
+        }
+      },
+      "required": [
+        "initial_offset_ms",
+        "drift_ppm",
+        "jitter_ms_std"
+      ],
+      "title": "ClockArtifacts",
+      "type": "object"
+    },
+    "ContextConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "circadian": {
+          "$ref": "#/$defs/CircadianConfig"
+        },
+        "meals": {
+          "$ref": "#/$defs/MealsConfig"
+        },
+        "ordinary_activity": {
+          "$ref": "#/$defs/ActivityConfig"
+        },
+        "sleep": {
+          "$ref": "#/$defs/SleepConfig"
+        }
+      },
+      "required": [
+        "circadian",
+        "sleep",
+        "ordinary_activity",
+        "meals"
+      ],
+      "title": "ContextConfig",
+      "type": "object"
+    },
+    "ContinuousStream": {
+      "additionalProperties": false,
+      "properties": {
+        "axes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Axes"
+        },
+        "channels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Channels"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "mode": {
+          "title": "Mode",
+          "type": "string"
+        },
+        "sample_rate_hz": {
+          "title": "Sample Rate Hz",
+          "type": "integer"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        }
+      },
+      "required": [
+        "mode",
+        "sample_rate_hz"
+      ],
+      "title": "ContinuousStream",
+      "type": "object"
+    },
+    "DevicesConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "galaxy_watch8": {
+          "$ref": "#/$defs/GalaxyWatch8Config"
+        },
+        "muse_s": {
+          "$ref": "#/$defs/MuseSConfig"
+        },
+        "polar_h10": {
+          "$ref": "#/$defs/PolarH10Config"
+        }
+      },
+      "required": [
+        "muse_s",
+        "polar_h10",
+        "galaxy_watch8"
+      ],
+      "title": "DevicesConfig",
+      "type": "object"
+    },
+    "DiscreteUniform": {
+      "additionalProperties": false,
+      "properties": {
+        "distribution": {
+          "const": "discrete_uniform",
+          "title": "Distribution",
+          "type": "string"
+        },
+        "max": {
+          "minimum": 0,
+          "title": "Max",
+          "type": "integer"
+        },
+        "min": {
+          "minimum": 0,
+          "title": "Min",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "distribution",
+        "min",
+        "max"
+      ],
+      "title": "DiscreteUniform",
+      "type": "object"
+    },
+    "EcgArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_wander_strength": {
+          "$ref": "#/$defs/RangeFloat"
+        },
+        "extra_peak_probability": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Extra Peak Probability",
+          "type": "number"
+        },
+        "missed_peak_probability": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Missed Peak Probability",
+          "type": "number"
+        },
+        "motion_artifact_probability_per_min": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Motion Artifact Probability Per Min",
+          "type": "number"
+        }
+      },
+      "required": [
+        "baseline_wander_strength",
+        "motion_artifact_probability_per_min",
+        "missed_peak_probability",
+        "extra_peak_probability"
+      ],
+      "title": "EcgArtifacts",
+      "type": "object"
+    },
+    "EcgStream": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "leads": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Leads",
+          "type": "array"
+        },
+        "sample_rate_hz": {
+          "title": "Sample Rate Hz",
+          "type": "integer"
+        },
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sample_rate_hz",
+        "unit",
+        "leads"
+      ],
+      "title": "EcgStream",
+      "type": "object"
+    },
+    "EdaArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "flatline_probability_per_hour": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Flatline Probability Per Hour",
+          "type": "number"
+        },
+        "motion_spike_probability_per_min": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Motion Spike Probability Per Min",
+          "type": "number"
+        }
+      },
+      "required": [
+        "motion_spike_probability_per_min",
+        "flatline_probability_per_hour"
+      ],
+      "title": "EdaArtifacts",
+      "type": "object"
+    },
+    "EdaBaseline": {
+      "additionalProperties": false,
+      "properties": {
+        "tonic_level_us": {
+          "$ref": "#/$defs/LogNormal"
+        }
+      },
+      "required": [
+        "tonic_level_us"
+      ],
+      "title": "EdaBaseline",
+      "type": "object"
+    },
+    "EegArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "blink_events_per_min": {
+          "$ref": "#/$defs/RangeInt"
+        },
+        "channel_dropout_probability_per_hour": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Channel Dropout Probability Per Hour",
+          "type": "number"
+        },
+        "electrode_pop_probability_per_hour": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Electrode Pop Probability Per Hour",
+          "type": "number"
+        },
+        "jaw_emg_probability_per_min": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Jaw Emg Probability Per Min",
+          "type": "number"
+        },
+        "line_noise_hz": {
+          "enum": [
+            50,
+            60
+          ],
+          "title": "Line Noise Hz",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "blink_events_per_min",
+        "jaw_emg_probability_per_min",
+        "electrode_pop_probability_per_hour",
+        "channel_dropout_probability_per_hour",
+        "line_noise_hz"
+      ],
+      "title": "EegArtifacts",
+      "type": "object"
+    },
+    "EegBaseline": {
+      "additionalProperties": false,
+      "properties": {
+        "aperiodic_exponent": {
+          "$ref": "#/$defs/TruncatedNormal"
+        },
+        "relative_alpha": {
+          "$ref": "#/$defs/BetaDistribution"
+        },
+        "relative_gamma": {
+          "$ref": "#/$defs/BetaDistribution"
+        }
+      },
+      "required": [
+        "aperiodic_exponent",
+        "relative_alpha",
+        "relative_gamma"
+      ],
+      "title": "EegBaseline",
+      "type": "object"
+    },
+    "EegFeatures": {
+      "additionalProperties": false,
+      "properties": {
+        "aperiodic_enabled": {
+          "title": "Aperiodic Enabled",
+          "type": "boolean"
+        },
+        "connectivity_enabled": {
+          "title": "Connectivity Enabled",
+          "type": "boolean"
+        },
+        "frequency_bands_hz": {
+          "additionalProperties": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "propertyNames": {
+            "enum": [
+              "delta",
+              "theta",
+              "alpha",
+              "beta",
+              "gamma"
+            ]
+          },
+          "title": "Frequency Bands Hz",
+          "type": "object"
+        }
+      },
+      "required": [
+        "frequency_bands_hz",
+        "connectivity_enabled",
+        "aperiodic_enabled"
+      ],
+      "title": "EegFeatures",
+      "type": "object"
+    },
+    "EegStream": {
+      "additionalProperties": false,
+      "properties": {
+        "adc_bits": {
+          "exclusiveMinimum": 0,
+          "title": "Adc Bits",
+          "type": "integer"
+        },
+        "channels": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Channels",
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "mains_frequency_hz": {
+          "enum": [
+            50,
+            60
+          ],
+          "title": "Mains Frequency Hz",
+          "type": "integer"
+        },
+        "reference": {
+          "title": "Reference",
+          "type": "string"
+        },
+        "sample_rate_hz": {
+          "title": "Sample Rate Hz",
+          "type": "integer"
+        },
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sample_rate_hz",
+        "channels",
+        "unit",
+        "adc_bits",
+        "reference",
+        "mains_frequency_hz"
+      ],
+      "title": "EegStream",
+      "type": "object"
+    },
+    "EventsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "clip_window": {
+          "$ref": "#/$defs/ClipWindow"
+        },
+        "hard_negatives": {
+          "$ref": "#/$defs/HardNegativesConfig"
+        },
+        "intensity": {
+          "$ref": "#/$defs/BetaDistribution"
+        },
+        "matched_baseline_clips_per_day": {
+          "minimum": 0,
+          "title": "Matched Baseline Clips Per Day",
+          "type": "integer"
+        },
+        "minimum_gap_between_target_sec": {
+          "minimum": 0,
+          "title": "Minimum Gap Between Target Sec",
+          "type": "integer"
+        },
+        "modality_delays_sec": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RangeInt"
+          },
+          "propertyNames": {
+            "enum": [
+              "eeg",
+              "cardiac",
+              "eda",
+              "motor"
+            ]
+          },
+          "title": "Modality Delays Sec",
+          "type": "object"
+        },
+        "phases": {
+          "$ref": "#/$defs/PhaseDurations"
+        },
+        "target_events_per_day": {
+          "$ref": "#/$defs/DiscreteUniform"
+        },
+        "target_type": {
+          "const": "multimodal_arousal_episode",
+          "title": "Target Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_type",
+        "target_events_per_day",
+        "minimum_gap_between_target_sec",
+        "clip_window",
+        "phases",
+        "intensity",
+        "modality_delays_sec",
+        "hard_negatives",
+        "matched_baseline_clips_per_day"
+      ],
+      "title": "EventsConfig",
+      "type": "object"
+    },
+    "FeaturesConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "causal_only": {
+          "title": "Causal Only",
+          "type": "boolean"
+        },
+        "eeg": {
+          "$ref": "#/$defs/EegFeatures"
+        },
+        "hrv": {
+          "$ref": "#/$defs/HrvFeatures"
+        },
+        "minimum_coverage_default": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Coverage Default",
+          "type": "number"
+        },
+        "personal_baseline": {
+          "$ref": "#/$defs/PersonalBaselineConfig"
+        },
+        "registry_path": {
+          "format": "path",
+          "title": "Registry Path",
+          "type": "string"
+        },
+        "windows_sec": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Windows Sec",
+          "type": "array"
+        }
+      },
+      "required": [
+        "windows_sec",
+        "causal_only",
+        "minimum_coverage_default",
+        "personal_baseline",
+        "eeg",
+        "hrv",
+        "registry_path"
+      ],
+      "title": "FeaturesConfig",
+      "type": "object"
+    },
+    "GalaxyWatch8Config": {
+      "additionalProperties": false,
+      "properties": {
+        "accelerometer": {
+          "$ref": "#/$defs/ContinuousStream"
+        },
+        "capability_check_required": {
+          "default": true,
+          "title": "Capability Check Required",
+          "type": "boolean"
+        },
+        "eda": {
+          "$ref": "#/$defs/ContinuousStream"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "heart_rate_ibi": {
+          "$ref": "#/$defs/ContinuousStream"
+        },
+        "on_demand": {
+          "$ref": "#/$defs/OnDemandConfig"
+        },
+        "ppg": {
+          "$ref": "#/$defs/ContinuousStream"
+        },
+        "sdk_profile": {
+          "title": "Sdk Profile",
+          "type": "string"
+        },
+        "skin_temperature": {
+          "$ref": "#/$defs/TemperatureStream"
+        }
+      },
+      "required": [
+        "sdk_profile",
+        "accelerometer",
+        "eda",
+        "heart_rate_ibi",
+        "ppg",
+        "skin_temperature",
+        "on_demand"
+      ],
+      "title": "GalaxyWatch8Config",
+      "type": "object"
+    },
+    "GlobalArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "block_dropout_events_per_day": {
+          "$ref": "#/$defs/RangeInt"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "random_missing_probability_per_hour": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Random Missing Probability Per Hour",
+          "type": "number"
+        }
+      },
+      "required": [
+        "random_missing_probability_per_hour",
+        "block_dropout_events_per_day"
+      ],
+      "title": "GlobalArtifacts",
+      "type": "object"
+    },
+    "HardNegativeProbabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "false_alarm_like_episode": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "False Alarm Like Episode",
+          "type": "number"
+        },
+        "ordinary_physical_activity": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Ordinary Physical Activity",
+          "type": "number"
+        },
+        "quiet_cognitive_load": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Quiet Cognitive Load",
+          "type": "number"
+        },
+        "recovery_without_peak": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Recovery Without Peak",
+          "type": "number"
+        },
+        "sensor_artifact_episode": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Sensor Artifact Episode",
+          "type": "number"
+        }
+      },
+      "required": [
+        "ordinary_physical_activity",
+        "quiet_cognitive_load",
+        "sensor_artifact_episode",
+        "recovery_without_peak",
+        "false_alarm_like_episode"
+      ],
+      "title": "HardNegativeProbabilities",
+      "type": "object"
+    },
+    "HardNegativesConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "ratio_to_target": {
+          "minimum": 0,
+          "title": "Ratio To Target",
+          "type": "number"
+        },
+        "types": {
+          "$ref": "#/$defs/HardNegativeProbabilities"
+        }
+      },
+      "required": [
+        "ratio_to_target",
+        "types"
+      ],
+      "title": "HardNegativesConfig",
+      "type": "object"
+    },
+    "HrRrStream": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "rr_unit": {
+          "title": "Rr Unit",
+          "type": "string"
+        },
+        "sample_rate_hz": {
+          "title": "Sample Rate Hz",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sample_rate_hz",
+        "rr_unit"
+      ],
+      "title": "HrRrStream",
+      "type": "object"
+    },
+    "HrvFeatures": {
+      "additionalProperties": false,
+      "properties": {
+        "entropy_min_window_sec": {
+          "exclusiveMinimum": 0,
+          "title": "Entropy Min Window Sec",
+          "type": "integer"
+        },
+        "frequency_domain_min_window_sec": {
+          "exclusiveMinimum": 0,
+          "title": "Frequency Domain Min Window Sec",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "frequency_domain_min_window_sec",
+        "entropy_min_window_sec"
+      ],
+      "title": "HrvFeatures",
+      "type": "object"
+    },
+    "LabelsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "forecast_horizons_sec": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Forecast Horizons Sec",
+          "type": "array"
+        },
+        "include_artifact_labels": {
+          "title": "Include Artifact Labels",
+          "type": "boolean"
+        },
+        "include_intensity_target": {
+          "title": "Include Intensity Target",
+          "type": "boolean"
+        },
+        "label_source": {
+          "const": "synthetic_rule_v1",
+          "title": "Label Source",
+          "type": "string"
+        },
+        "overlap_policy": {
+          "const": "multi_axis",
+          "title": "Overlap Policy",
+          "type": "string"
+        },
+        "phases": {
+          "$ref": "#/$defs/PhaseLabels"
+        }
+      },
+      "required": [
+        "phases",
+        "forecast_horizons_sec",
+        "include_intensity_target",
+        "include_artifact_labels",
+        "label_source",
+        "overlap_policy"
+      ],
+      "title": "LabelsConfig",
+      "type": "object"
+    },
+    "LogNormal": {
+      "additionalProperties": false,
+      "properties": {
+        "distribution": {
+          "const": "lognormal",
+          "title": "Distribution",
+          "type": "string"
+        },
+        "geometric_std": {
+          "exclusiveMinimum": 1,
+          "title": "Geometric Std",
+          "type": "number"
+        },
+        "median": {
+          "exclusiveMinimum": 0,
+          "title": "Median",
+          "type": "number"
+        }
+      },
+      "required": [
+        "distribution",
+        "median",
+        "geometric_std"
+      ],
+      "title": "LogNormal",
+      "type": "object"
+    },
+    "MealsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "daily_count": {
+          "minimum": 0,
+          "title": "Daily Count",
+          "type": "integer"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "daily_count"
+      ],
+      "title": "MealsConfig",
+      "type": "object"
+    },
+    "MuseSConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "accelerometer": {
+          "$ref": "#/$defs/AccelerometerStream"
+        },
+        "aux": {
+          "$ref": "#/$defs/AuxStream"
+        },
+        "capability_check_required": {
+          "default": true,
+          "title": "Capability Check Required",
+          "type": "boolean"
+        },
+        "eeg": {
+          "$ref": "#/$defs/EegStream"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "hardware_profile": {
+          "title": "Hardware Profile",
+          "type": "string"
+        },
+        "ppg": {
+          "$ref": "#/$defs/PpgStream"
+        }
+      },
+      "required": [
+        "hardware_profile",
+        "eeg",
+        "accelerometer",
+        "ppg",
+        "aux"
+      ],
+      "title": "MuseSConfig",
+      "type": "object"
+    },
+    "NormalHours": {
+      "additionalProperties": false,
+      "properties": {
+        "mean": {
+          "title": "Mean",
+          "type": "number"
+        },
+        "std": {
+          "exclusiveMinimum": 0,
+          "title": "Std",
+          "type": "number"
+        }
+      },
+      "required": [
+        "mean",
+        "std"
+      ],
+      "title": "NormalHours",
+      "type": "object"
+    },
+    "OnDemandConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "ecg_500hz": {
+          "$ref": "#/$defs/OnDemandStream"
+        },
+        "ppg_100hz": {
+          "$ref": "#/$defs/OnDemandStream"
+        }
+      },
+      "required": [
+        "ecg_500hz",
+        "ppg_100hz"
+      ],
+      "title": "OnDemandConfig",
+      "type": "object"
+    },
+    "OnDemandStream": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "policy": {
+          "title": "Policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy"
+      ],
+      "title": "OnDemandStream",
+      "type": "object"
+    },
+    "PersonalBaselineConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "exclude_contexts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Exclude Contexts",
+          "type": "array"
+        },
+        "exclude_low_quality": {
+          "default": true,
+          "title": "Exclude Low Quality",
+          "type": "boolean"
+        },
+        "lookback_sec": {
+          "exclusiveMinimum": 0,
+          "title": "Lookback Sec",
+          "type": "integer"
+        },
+        "method": {
+          "const": "rolling_robust",
+          "title": "Method",
+          "type": "string"
+        },
+        "warmup_sec": {
+          "exclusiveMinimum": 0,
+          "title": "Warmup Sec",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "warmup_sec",
+        "method",
+        "lookback_sec",
+        "exclude_contexts"
+      ],
+      "title": "PersonalBaselineConfig",
+      "type": "object"
+    },
+    "PhaseDurations": {
+      "additionalProperties": false,
+      "properties": {
+        "onset_sec": {
+          "$ref": "#/$defs/RangeInt"
+        },
+        "peak_sec": {
+          "$ref": "#/$defs/RangeInt"
+        },
+        "post_sec": {
+          "$ref": "#/$defs/RangeInt"
+        },
+        "pre_early_sec": {
+          "$ref": "#/$defs/RangeInt"
+        },
+        "pre_late_sec": {
+          "$ref": "#/$defs/RangeInt"
+        },
+        "recovery_early_sec": {
+          "$ref": "#/$defs/RangeInt"
+        },
+        "recovery_late_sec": {
+          "$ref": "#/$defs/RangeInt"
+        }
+      },
+      "required": [
+        "pre_early_sec",
+        "pre_late_sec",
+        "onset_sec",
+        "peak_sec",
+        "recovery_early_sec",
+        "recovery_late_sec",
+        "post_sec"
+      ],
+      "title": "PhaseDurations",
+      "type": "object"
+    },
+    "PhaseLabels": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {
+          "const": 0,
+          "title": "Baseline",
+          "type": "integer"
+        },
+        "onset": {
+          "const": 3,
+          "title": "Onset",
+          "type": "integer"
+        },
+        "peak": {
+          "const": 4,
+          "title": "Peak",
+          "type": "integer"
+        },
+        "post": {
+          "const": 7,
+          "title": "Post",
+          "type": "integer"
+        },
+        "pre_early": {
+          "const": 1,
+          "title": "Pre Early",
+          "type": "integer"
+        },
+        "pre_late": {
+          "const": 2,
+          "title": "Pre Late",
+          "type": "integer"
+        },
+        "recovery_early": {
+          "const": 5,
+          "title": "Recovery Early",
+          "type": "integer"
+        },
+        "recovery_late": {
+          "const": 6,
+          "title": "Recovery Late",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "baseline",
+        "pre_early",
+        "pre_late",
+        "onset",
+        "peak",
+        "recovery_early",
+        "recovery_late",
+        "post"
+      ],
+      "title": "PhaseLabels",
+      "type": "object"
+    },
+    "PolarH10Config": {
+      "additionalProperties": false,
+      "properties": {
+        "accelerometer": {
+          "$ref": "#/$defs/AccelerometerStream"
+        },
+        "ecg": {
+          "$ref": "#/$defs/EcgStream"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "hr_rr": {
+          "$ref": "#/$defs/HrRrStream"
+        }
+      },
+      "required": [
+        "ecg",
+        "hr_rr",
+        "accelerometer"
+      ],
+      "title": "PolarH10Config",
+      "type": "object"
+    },
+    "PopulationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "age_years": {
+          "$ref": "#/$defs/TruncatedNormal"
+        },
+        "allow_no_response_probability": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Allow No Response Probability",
+          "type": "number"
+        },
+        "allow_opposite_direction_probability": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Allow Opposite Direction Probability",
+          "type": "number"
+        },
+        "baseline_profiles": {
+          "$ref": "#/$defs/BaselineProfiles"
+        },
+        "biological_sex": {
+          "$ref": "#/$defs/CategoryProbabilities"
+        },
+        "participant_id_prefix": {
+          "default": "P",
+          "title": "Participant Id Prefix",
+          "type": "string"
+        },
+        "research_prior_strength": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Research Prior Strength",
+          "type": "number"
+        },
+        "response_archetypes": {
+          "$ref": "#/$defs/ArchetypeProbabilities"
+        }
+      },
+      "required": [
+        "age_years",
+        "biological_sex",
+        "baseline_profiles",
+        "response_archetypes",
+        "research_prior_strength",
+        "allow_opposite_direction_probability",
+        "allow_no_response_probability"
+      ],
+      "title": "PopulationConfig",
+      "type": "object"
+    },
+    "PpgArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "contact_loss_probability_per_hour": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Contact Loss Probability Per Hour",
+          "type": "number"
+        },
+        "motion_coupling_strength": {
+          "$ref": "#/$defs/RangeFloat"
+        }
+      },
+      "required": [
+        "motion_coupling_strength",
+        "contact_loss_probability_per_hour"
+      ],
+      "title": "PpgArtifacts",
+      "type": "object"
+    },
+    "PpgStream": {
+      "additionalProperties": false,
+      "properties": {
+        "channels": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Channels",
+          "type": "array"
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode"
+        },
+        "sample_rate_hz": {
+          "title": "Sample Rate Hz",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "enabled",
+        "sample_rate_hz",
+        "channels"
+      ],
+      "title": "PpgStream",
+      "type": "object"
+    },
+    "RangeFloat": {
+      "additionalProperties": false,
+      "properties": {
+        "max": {
+          "title": "Max",
+          "type": "number"
+        },
+        "min": {
+          "title": "Min",
+          "type": "number"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "title": "RangeFloat",
+      "type": "object"
+    },
+    "RangeInt": {
+      "additionalProperties": false,
+      "properties": {
+        "max": {
+          "title": "Max",
+          "type": "integer"
+        },
+        "min": {
+          "title": "Min",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "title": "RangeInt",
+      "type": "object"
+    },
+    "RunSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_rate_hz": {
+          "default": 1,
+          "title": "Canonical Rate Hz",
+          "type": "integer"
+        },
+        "chunk_duration_sec": {
+          "default": 3600,
+          "exclusiveMinimum": 0,
+          "title": "Chunk Duration Sec",
+          "type": "integer"
+        },
+        "deterministic": {
+          "default": true,
+          "title": "Deterministic",
+          "type": "boolean"
+        },
+        "duration_days": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Days"
+        },
+        "duration_sec": {
+          "exclusiveMinimum": 0,
+          "title": "Duration Sec",
+          "type": "integer"
+        },
+        "fail_on_warning": {
+          "default": false,
+          "title": "Fail On Warning",
+          "type": "boolean"
+        },
+        "participant_count": {
+          "exclusiveMinimum": 0,
+          "title": "Participant Count",
+          "type": "integer"
+        },
+        "seed": {
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "start_time_utc": {
+          "format": "date-time",
+          "title": "Start Time Utc",
+          "type": "string"
+        },
+        "timezone_context": {
+          "default": "UTC",
+          "title": "Timezone Context",
+          "type": "string"
+        }
+      },
+      "required": [
+        "seed",
+        "start_time_utc",
+        "duration_sec",
+        "participant_count"
+      ],
+      "title": "RunSettings",
+      "type": "object"
+    },
+    "SleepConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "bedtime_local_hour": {
+          "$ref": "#/$defs/NormalHours"
+        },
+        "duration_hours": {
+          "$ref": "#/$defs/NormalHours"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "bedtime_local_hour",
+        "duration_hours"
+      ],
+      "title": "SleepConfig",
+      "type": "object"
+    },
+    "SplitsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "seed": {
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "strategy": {
+          "const": "by_person",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "test_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Test Fraction",
+          "type": "number"
+        },
+        "train_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Train Fraction",
+          "type": "number"
+        },
+        "validation_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Validation Fraction",
+          "type": "number"
+        }
+      },
+      "required": [
+        "strategy",
+        "train_fraction",
+        "validation_fraction",
+        "test_fraction",
+        "seed"
+      ],
+      "title": "SplitsConfig",
+      "type": "object"
+    },
+    "StorageSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "estimated_size_guard_gb": {
+          "default": 20,
+          "exclusiveMinimum": 0,
+          "title": "Estimated Size Guard Gb",
+          "type": "number"
+        },
+        "output_root": {
+          "default": "output",
+          "format": "path",
+          "title": "Output Root",
+          "type": "string"
+        },
+        "parquet_compression": {
+          "default": "zstd",
+          "enum": [
+            "zstd",
+            "snappy",
+            "none"
+          ],
+          "title": "Parquet Compression",
+          "type": "string"
+        },
+        "partition_by": {
+          "default": [
+            "person_id",
+            "date_utc"
+          ],
+          "items": {
+            "enum": [
+              "person_id",
+              "date_utc"
+            ],
+            "type": "string"
+          },
+          "title": "Partition By",
+          "type": "array"
+        },
+        "write_full_native_streams": {
+          "default": false,
+          "title": "Write Full Native Streams",
+          "type": "boolean"
+        },
+        "write_mne_fif_for_eeg": {
+          "default": true,
+          "title": "Write Mne Fif For Eeg",
+          "type": "boolean"
+        },
+        "write_native_clips": {
+          "default": true,
+          "title": "Write Native Clips",
+          "type": "boolean"
+        },
+        "write_truth": {
+          "default": true,
+          "title": "Write Truth",
+          "type": "boolean"
+        }
+      },
+      "title": "StorageSettings",
+      "type": "object"
+    },
+    "TemperatureStream": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "mode": {
+          "const": "continuous_event",
+          "title": "Mode",
+          "type": "string"
+        },
+        "synthetic_observation_rate_hz": {
+          "title": "Synthetic Observation Rate Hz",
+          "type": "integer"
+        },
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "synthetic_observation_rate_hz",
+        "unit"
+      ],
+      "title": "TemperatureStream",
+      "type": "object"
+    },
+    "TruncatedNormal": {
+      "additionalProperties": false,
+      "properties": {
+        "distribution": {
+          "const": "truncated_normal",
+          "title": "Distribution",
+          "type": "string"
+        },
+        "max": {
+          "title": "Max",
+          "type": "number"
+        },
+        "mean": {
+          "title": "Mean",
+          "type": "number"
+        },
+        "min": {
+          "title": "Min",
+          "type": "number"
+        },
+        "std": {
+          "exclusiveMinimum": 0,
+          "title": "Std",
+          "type": "number"
+        }
+      },
+      "required": [
+        "distribution",
+        "mean",
+        "std",
+        "min",
+        "max"
+      ],
+      "title": "TruncatedNormal",
+      "type": "object"
+    },
+    "ValidationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "feature_recomputation": {
+          "title": "Feature Recomputation",
+          "type": "boolean"
+        },
+        "generate_html_report": {
+          "title": "Generate Html Report",
+          "type": "boolean"
+        },
+        "invariants": {
+          "title": "Invariants",
+          "type": "boolean"
+        },
+        "leakage_checks": {
+          "title": "Leakage Checks",
+          "type": "boolean"
+        },
+        "schema": {
+          "title": "Schema",
+          "type": "boolean"
+        },
+        "simple_model_sanity_check": {
+          "title": "Simple Model Sanity Check",
+          "type": "boolean"
+        },
+        "statistical_checks": {
+          "title": "Statistical Checks",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema",
+        "invariants",
+        "feature_recomputation",
+        "leakage_checks",
+        "statistical_checks",
+        "simple_model_sanity_check",
+        "generate_html_report"
+      ],
+      "title": "ValidationConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "$ref": "#/$defs/ArtifactsConfig"
+    },
+    "context": {
+      "$ref": "#/$defs/ContextConfig"
+    },
+    "devices": {
+      "$ref": "#/$defs/DevicesConfig"
+    },
+    "events": {
+      "$ref": "#/$defs/EventsConfig"
+    },
+    "features": {
+      "$ref": "#/$defs/FeaturesConfig"
+    },
+    "labels": {
+      "$ref": "#/$defs/LabelsConfig"
+    },
+    "population": {
+      "$ref": "#/$defs/PopulationConfig"
+    },
+    "profile": {
+      "enum": [
+        "quick",
+        "mvp",
+        "golden"
+      ],
+      "title": "Profile",
+      "type": "string"
+    },
+    "project": {
+      "const": "multisensor_synth",
+      "title": "Project",
+      "type": "string"
+    },
+    "run": {
+      "$ref": "#/$defs/RunSettings"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "splits": {
+      "$ref": "#/$defs/SplitsConfig"
+    },
+    "storage": {
+      "$ref": "#/$defs/StorageSettings"
+    },
+    "validation": {
+      "$ref": "#/$defs/ValidationConfig"
+    }
+  },
+  "required": [
+    "schema_version",
+    "project",
+    "profile",
+    "run",
+    "storage",
+    "devices",
+    "population",
+    "context",
+    "events",
+    "artifacts",
+    "features",
+    "labels",
+    "splits",
+    "validation"
+  ],
+  "title": "ProjectConfig",
+  "type": "object"
+}

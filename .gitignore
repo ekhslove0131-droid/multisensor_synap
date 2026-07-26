@@ -1,0 +1,13 @@
+.bootstrap-uv/
+.venv/
+.uv-cache/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+output/
+dist/
+build/
+*.egg-info/

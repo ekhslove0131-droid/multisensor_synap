@@ -1,0 +1,13 @@
+extends: mvp.yaml
+profile: quick
+
+run:
+  duration_sec: 21600
+  duration_days: null
+  participant_count: 3
+
+events:
+  target_events_per_day:
+    distribution: discrete_uniform
+    min: 2
+    max: 2

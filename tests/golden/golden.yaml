@@ -1,0 +1,23 @@
+extends: ../../configs/mvp.yaml
+profile: golden
+
+run:
+  duration_sec: 600
+  duration_days: null
+  participant_count: 1
+  chunk_duration_sec: 120
+
+events:
+  target_events_per_day:
+    distribution: discrete_uniform
+    min: 1
+    max: 1
+  minimum_gap_between_target_sec: 0
+  phases:
+    pre_early_sec: {min: 30, max: 30}
+    pre_late_sec: {min: 15, max: 15}
+    onset_sec: {min: 5, max: 5}
+    peak_sec: {min: 10, max: 10}
+    recovery_early_sec: {min: 30, max: 30}
+    recovery_late_sec: {min: 60, max: 60}
+    post_sec: {min: 0, max: 0}

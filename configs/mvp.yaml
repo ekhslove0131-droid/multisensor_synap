@@ -1,0 +1,258 @@
+schema_version: "1.0"
+project: multisensor_synth
+profile: mvp
+
+run:
+  seed: 20260725
+  start_time_utc: "2026-01-01T00:00:00Z"
+  duration_sec: 432000
+  duration_days: 5
+  participant_count: 12
+  canonical_rate_hz: 1
+  timezone_context: Asia/Seoul
+  chunk_duration_sec: 3600
+  deterministic: true
+  fail_on_warning: false
+
+storage:
+  output_root: output
+  parquet_compression: zstd
+  partition_by: [person_id, date_utc]
+  write_truth: true
+  write_native_clips: true
+  write_full_native_streams: false
+  write_mne_fif_for_eeg: true
+  estimated_size_guard_gb: 20
+
+devices:
+  muse_s:
+    enabled: true
+    hardware_profile: muse_s_gen2_default
+    capability_check_required: true
+    eeg:
+      enabled: true
+      sample_rate_hz: 256
+      channels: [TP9, AF7, AF8, TP10]
+      unit: uV
+      adc_bits: 12
+      reference: FPz_CMS_DRL
+      mains_frequency_hz: 60
+    accelerometer:
+      enabled: true
+      sample_rate_hz: 52
+      range_g: 4
+      axes: [x, y, z]
+    ppg:
+      enabled: false
+      sample_rate_hz: 64
+      channels: [ir_1, ir_2, red]
+    aux:
+      enabled: false
+  polar_h10:
+    enabled: true
+    ecg:
+      enabled: true
+      sample_rate_hz: 130
+      unit: uV
+      leads: [chest_single_lead]
+    hr_rr:
+      enabled: true
+      sample_rate_hz: 1
+      rr_unit: ms
+    accelerometer:
+      enabled: true
+      sample_rate_hz: 100
+      allowed_sample_rates_hz: [25, 50, 100, 200]
+      range_g: 8
+      allowed_ranges_g: [2, 4, 8]
+      axes: [x, y, z]
+  galaxy_watch8:
+    enabled: true
+    sdk_profile: samsung_health_sensor_sdk
+    capability_check_required: true
+    accelerometer:
+      enabled: true
+      mode: continuous
+      sample_rate_hz: 25
+      axes: [x, y, z]
+    eda:
+      enabled: true
+      mode: continuous
+      sample_rate_hz: 1
+      unit: uS
+    heart_rate_ibi:
+      enabled: true
+      mode: continuous
+      sample_rate_hz: 1
+    ppg:
+      enabled: true
+      mode: continuous
+      sample_rate_hz: 25
+      channels: [green, ir, red]
+    skin_temperature:
+      enabled: true
+      mode: continuous_event
+      synthetic_observation_rate_hz: 1
+      units: C
+    on_demand:
+      ecg_500hz: {enabled: false, policy: calibration_only}
+      ppg_100hz: {enabled: false, policy: calibration_only}
+
+population:
+  participant_id_prefix: P
+  age_years:
+    {distribution: truncated_normal, mean: 10.0, std: 2.5, min: 6, max: 17}
+  biological_sex:
+    categories: [female, male]
+    probabilities: [0.35, 0.65]
+  baseline_profiles:
+    cardiac:
+      resting_hr_bpm:
+        {distribution: truncated_normal, mean: 82, std: 11, min: 50, max: 125}
+      rmssd_ms: {distribution: lognormal, median: 35, geometric_std: 1.6}
+    eeg:
+      aperiodic_exponent:
+        {distribution: truncated_normal, mean: 1.6, std: 0.25, min: 0.8, max: 2.5}
+      relative_alpha: {distribution: beta, alpha: 4.0, beta: 8.0}
+      relative_gamma: {distribution: beta, alpha: 2.0, beta: 18.0}
+    eda:
+      tonic_level_us: {distribution: lognormal, median: 3.0, geometric_std: 1.8}
+    recovery_capacity: {distribution: beta, alpha: 4.0, beta: 2.5}
+  response_archetypes:
+    eeg_first: 0.20
+    autonomic_first: 0.25
+    motor_first: 0.20
+    quiet_internal: 0.15
+    motor_dominant: 0.10
+    partial_response: 0.08
+    non_responder: 0.02
+  research_prior_strength: 0.20
+  allow_opposite_direction_probability: 0.15
+  allow_no_response_probability: 0.10
+
+context:
+  circadian: {enabled: true, amplitude_variation: 0.25}
+  sleep:
+    enabled: true
+    bedtime_local_hour: {mean: 22.0, std: 1.0}
+    duration_hours: {mean: 8.8, std: 0.9}
+  ordinary_activity:
+    daily_bouts: {min: 4, max: 12}
+  meals: {enabled: true, daily_count: 3}
+
+events:
+  target_type: multimodal_arousal_episode
+  target_events_per_day: {distribution: discrete_uniform, min: 1, max: 4}
+  minimum_gap_between_target_sec: 1800
+  clip_window: {pre_sec: 300, post_sec: 600}
+  phases:
+    pre_early_sec: {min: 60, max: 180}
+    pre_late_sec: {min: 15, max: 60}
+    onset_sec: {min: 5, max: 30}
+    peak_sec: {min: 10, max: 120}
+    recovery_early_sec: {min: 30, max: 180}
+    recovery_late_sec: {min: 60, max: 600}
+    post_sec: {min: 0, max: 600}
+  intensity: {distribution: beta, alpha: 2.2, beta: 2.0}
+  modality_delays_sec:
+    eeg: {min: -20, max: 20}
+    cardiac: {min: -10, max: 30}
+    eda: {min: 0, max: 45}
+    motor: {min: -10, max: 60}
+  hard_negatives:
+    ratio_to_target: 1.0
+    types:
+      ordinary_physical_activity: 0.35
+      quiet_cognitive_load: 0.20
+      sensor_artifact_episode: 0.20
+      recovery_without_peak: 0.15
+      false_alarm_like_episode: 0.10
+  matched_baseline_clips_per_day: 2
+
+artifacts:
+  global:
+    enabled: true
+    random_missing_probability_per_hour: 0.02
+    block_dropout_events_per_day: {min: 0, max: 3}
+  clocks:
+    initial_offset_ms:
+      muse_s: {min: -300, max: 300}
+      polar_h10: {min: -250, max: 250}
+      galaxy_watch8: {min: -500, max: 500}
+    drift_ppm:
+      muse_s: {min: -30, max: 30}
+      polar_h10: {min: -20, max: 20}
+      galaxy_watch8: {min: -40, max: 40}
+    jitter_ms_std: {muse_s: 4, polar_h10: 6, galaxy_watch8: 12}
+  eeg:
+    blink_events_per_min: {min: 5, max: 25}
+    jaw_emg_probability_per_min: 0.08
+    electrode_pop_probability_per_hour: 0.20
+    channel_dropout_probability_per_hour: 0.05
+    line_noise_hz: 60
+  ecg:
+    baseline_wander_strength: {min: 0.0, max: 0.3}
+    motion_artifact_probability_per_min: 0.04
+    missed_peak_probability: 0.002
+    extra_peak_probability: 0.001
+  ppg:
+    motion_coupling_strength: {min: 0.2, max: 0.9}
+    contact_loss_probability_per_hour: 0.05
+  eda:
+    motion_spike_probability_per_min: 0.03
+    flatline_probability_per_hour: 0.02
+  accelerometer:
+    bias_std_g: 0.01
+    scale_error_std: 0.015
+    clipping_probability_per_hour: 0.005
+
+features:
+  windows_sec: [5, 15, 30, 60, 180, 300]
+  causal_only: true
+  minimum_coverage_default: 0.8
+  personal_baseline:
+    enabled: true
+    warmup_sec: 1800
+    method: rolling_robust
+    lookback_sec: 21600
+    exclude_contexts: [moderate_activity]
+    exclude_low_quality: true
+  eeg:
+    frequency_bands_hz:
+      delta: [1, 4]
+      theta: [4, 8]
+      alpha: [8, 13]
+      beta: [13, 30]
+      gamma: [30, 45]
+    connectivity_enabled: true
+    aperiodic_enabled: true
+  hrv:
+    frequency_domain_min_window_sec: 300
+    entropy_min_window_sec: 180
+  registry_path: configs/feature_registry.yaml
+
+labels:
+  phases:
+    {baseline: 0, pre_early: 1, pre_late: 2, onset: 3, peak: 4,
+     recovery_early: 5, recovery_late: 6, post: 7}
+  forecast_horizons_sec: [30, 60, 120, 180]
+  include_intensity_target: true
+  include_artifact_labels: true
+  label_source: synthetic_rule_v1
+  overlap_policy: multi_axis
+
+splits:
+  strategy: by_person
+  train_fraction: 0.67
+  validation_fraction: 0.17
+  test_fraction: 0.16
+  seed: 20260725
+
+validation:
+  schema: true
+  invariants: true
+  feature_recomputation: true
+  leakage_checks: true
+  statistical_checks: true
+  simple_model_sanity_check: true
+  generate_html_report: true
