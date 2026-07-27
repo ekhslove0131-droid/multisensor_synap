@@ -111,11 +111,14 @@ def select_event_threshold(
 ) -> float:
     """Choose validation event-F1 threshold; ties prefer fewer false alerts then higher cutoff."""
 
-    values = (
-        np.unique(np.round(probability, 6))
-        if candidates is None
-        else np.asarray(list(candidates), dtype=np.float64)
-    )
+    if candidates is None:
+        return _select_event_threshold_incremental(
+            truth,
+            probability,
+            duration_hours=duration_hours,
+        )
+
+    values = np.asarray(list(candidates), dtype=np.float64)
     scored: list[tuple[float, float, float]] = []
     for threshold in values:
         predicted = probability >= threshold
@@ -138,3 +141,84 @@ def select_event_threshold(
     if not scored:
         return 0.5
     return max(scored)[2]
+
+
+def _select_event_threshold_incremental(
+    truth: NDArray[np.int8],
+    probability: NDArray[np.float64],
+    *,
+    duration_hours: float,
+) -> float:
+    """Evaluate every rounded score threshold without rescanning the full series."""
+
+    if len(truth) != len(probability):
+        raise ValueError("truth and probability lengths must match")
+    thresholds = np.unique(np.round(probability, 6))
+    if not len(thresholds):
+        return 0.5
+
+    truth_mask = truth.astype(bool)
+    truth_segments = _segments(truth_mask)
+    event_ids = np.full(len(truth), -1, dtype=np.int32)
+    for event_id, (start, end) in enumerate(truth_segments):
+        event_ids[start : end + 1] = event_id
+
+    order = np.argsort(probability, kind="stable")[::-1]
+    active = np.zeros(len(truth), dtype=bool)
+    detected_events = np.zeros(len(truth_segments), dtype=bool)
+    detected_count = 0
+    false_alerts = 0
+    cursor = 0
+    best: tuple[float, float, float] | None = None
+
+    for threshold in thresholds[::-1]:
+        while cursor < len(order) and probability[order[cursor]] >= threshold:
+            index = int(order[cursor])
+            cursor += 1
+            active[index] = True
+            if truth_mask[index]:
+                event_id = int(event_ids[index])
+                if event_id >= 0 and not detected_events[event_id]:
+                    detected_events[event_id] = True
+                    detected_count += 1
+                continue
+            left_active = (
+                index > 0
+                and not truth_mask[index - 1]
+                and active[index - 1]
+            )
+            right_active = (
+                index + 1 < len(active)
+                and not truth_mask[index + 1]
+                and active[index + 1]
+            )
+            false_alerts += 1 - int(left_active) - int(right_active)
+
+        missed = len(truth_segments) - detected_count
+        recall = (
+            detected_count / (detected_count + missed)
+            if detected_count + missed
+            else 0.0
+        )
+        precision = (
+            detected_count / (detected_count + false_alerts)
+            if detected_count + false_alerts
+            else 0.0
+        )
+        event_f1 = (
+            2 * precision * recall / (precision + recall)
+            if precision + recall
+            else 0.0
+        )
+        false_alerts_per_hour = (
+            false_alerts / duration_hours if duration_hours else 0.0
+        )
+        score = (
+            event_f1,
+            -false_alerts_per_hour,
+            float(threshold),
+        )
+        if best is None or score > best:
+            best = score
+
+    return 0.5 if best is None else best[2]
