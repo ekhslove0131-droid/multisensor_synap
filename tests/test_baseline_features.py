@@ -72,3 +72,12 @@ def test_causal_feature_windows_never_observe_future_rows() -> None:
     assert f"{ORACLE_LATENT_FACTORS[0]}__mean_5s" in names
     assert f"{ORACLE_LATENT_FACTORS[0]}__std_60s" in names
     assert f"{ORACLE_LATENT_FACTORS[0]}__slope_60s" in names
+
+
+def test_personal_baseline_never_exceeds_selected_adaptation_cap() -> None:
+    frame = _frame(1900)
+    global_baseline = fit_global_baseline(frame.iloc[:1800])
+
+    baseline = personalize_baseline(frame, global_baseline, weight_cap=0.20)
+
+    assert baseline["personal_weight"].max() == 0.20

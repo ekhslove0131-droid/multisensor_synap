@@ -36,12 +36,15 @@ def personalize_baseline(
     lookback_sec: int = 21600,
     refresh_sec: int = 60,
     quality_confidence: float = 1.0,
+    weight_cap: float = 1.0,
     factors: tuple[str, ...] = ORACLE_LATENT_FACTORS,
 ) -> pd.DataFrame:
     """Blend causal personal robust baselines with context-specific global baselines."""
 
     if not 0 <= quality_confidence <= 1:
         raise ValueError("quality_confidence must be in [0, 1]")
+    if not 0 <= weight_cap <= 1:
+        raise ValueError("weight_cap must be in [0, 1]")
     if warmup_sec <= 0 or lookback_sec < warmup_sec or refresh_sec <= 0:
         raise ValueError("invalid warmup/lookback/refresh contract")
     if not frame["timestamp_utc"].is_monotonic_increasing:
@@ -60,6 +63,7 @@ def personalize_baseline(
         n_eff / (n_eff + warmup_sec) * quality_confidence,
         0.0,
     )
+    weight = np.minimum(weight, weight_cap)
     refresh_mask = index % refresh_sec == 0
     output = pd.DataFrame(
         {
