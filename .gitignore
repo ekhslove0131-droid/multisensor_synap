@@ -11,6 +11,8 @@ data/raw/
 data/prepared/
 data/registry/
 data/audit/
+data/outcomes/
+data/model_registry/
 artifacts/
 output/
 reports/generated/
@@ -19,3 +21,6 @@ knime/exports/
 *.pkl
 *.pickle
 *.joblib
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

@@ -1,0 +1,15 @@
+schema_version: goal1.5/behavior-ontology/v1
+behavior_codes:
+  - ear_covering
+  - head_turn_away
+  - withdrawal_movement
+  - exit_attempt
+  - repetitive_hand_movement
+  - repetitive_body_movement
+  - movement_reduction
+  - motion_freeze
+  - repetitive_object_contact
+  - sustained_pressure_or_contact
+review_tags:
+  - reported_meltdown_like
+  - reported_sensory_seeking_like

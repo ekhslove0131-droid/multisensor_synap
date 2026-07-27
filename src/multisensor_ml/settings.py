@@ -22,6 +22,20 @@ class Goal15Config(BaseModel):
     locked_test_audit_reason: str = Field(min_length=8)
 
 
+class FactoryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["goal1.5/synthetic-factory/v1"]
+    series_id: str = Field(min_length=1)
+    generator_config: Path
+    behavior_ontology: Path
+    seeds: tuple[int, ...] = Field(min_length=1)
+    generator_overrides: dict[str, object] = Field(default_factory=dict)
+    data_root: Path = Path("data")
+    outcome_root: Path = Path("data/outcomes")
+    random_state: int = 20260725
+
+
 def load_goal15_config(path: Path) -> Goal15Config:
     source = path.resolve()
     payload = yaml.safe_load(source.read_text(encoding="utf-8"))
@@ -34,5 +48,22 @@ def load_goal15_config(path: Path) -> Goal15Config:
             "generator_config": (base / config.generator_config).resolve(),
             "data_root": (base / config.data_root).resolve(),
             "artifact_root": (base / config.artifact_root).resolve(),
+        }
+    )
+
+
+def load_factory_config(path: Path) -> FactoryConfig:
+    source = path.resolve()
+    payload = yaml.safe_load(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("synthetic factory config root must be a mapping")
+    config = FactoryConfig.model_validate(payload)
+    base = source.parent
+    return config.model_copy(
+        update={
+            "generator_config": (base / config.generator_config).resolve(),
+            "behavior_ontology": (base / config.behavior_ontology).resolve(),
+            "data_root": (base / config.data_root).resolve(),
+            "outcome_root": (base / config.outcome_root).resolve(),
         }
     )

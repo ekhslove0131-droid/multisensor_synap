@@ -1,0 +1,13 @@
+schema_version: goal1.5/synthetic-factory/v1
+series_id: quick12-oracle-v1
+generator_config: ../../multisensor_synth/configs/quick.yaml
+behavior_ontology: behavior_ontology_v1.yaml
+seeds: [20260725]
+generator_overrides:
+  run:
+    duration_sec: 7200
+    duration_days: null
+    participant_count: 12
+data_root: ../data
+outcome_root: ../data/outcomes
+random_state: 20260725
