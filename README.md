@@ -74,7 +74,8 @@ dataset hash 조합은 두 번 실행할 수 없습니다.
    변경하지 않습니다.
 
 상세 내용은 [아키텍처](docs/ARCHITECTURE.md),
-[KNIME 사용법](docs/KNIME.md), [MVP 결과](docs/RESULTS_MVP3.md)를 참고하세요.
+[KNIME 사용법](docs/KNIME.md), [기존 Oracle MVP 결과](docs/RESULTS_MVP3.md),
+[계층형 MVP 결과](docs/RESULTS_HIERARCHICAL_MVP3.md)를 참고하세요.
 합성 공장과 계층형 학습 레지스트리 사용법은
 [한국어 KNIME 안내](docs/KNIME_FACTORY_AND_REGISTRY_KO.md)를 참고하세요.
 기존 [Multisensor_ML_Goal1_5.knwf](knime/Multisensor_ML_Goal1_5.knwf)는
