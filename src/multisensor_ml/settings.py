@@ -36,6 +36,17 @@ class FactoryConfig(BaseModel):
     random_state: int = 20260725
 
 
+class TrainingRegistryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["goal1.5/training-registry-config/v1"]
+    registry_path: Path
+    artifact_root: Path
+    outcome_root: Path
+    random_state: int = 20260725
+    korean_router_version: str = Field(min_length=1)
+
+
 def load_goal15_config(path: Path) -> Goal15Config:
     source = path.resolve()
     payload = yaml.safe_load(source.read_text(encoding="utf-8"))
@@ -64,6 +75,22 @@ def load_factory_config(path: Path) -> FactoryConfig:
             "generator_config": (base / config.generator_config).resolve(),
             "behavior_ontology": (base / config.behavior_ontology).resolve(),
             "data_root": (base / config.data_root).resolve(),
+            "outcome_root": (base / config.outcome_root).resolve(),
+        }
+    )
+
+
+def load_training_registry_config(path: Path) -> TrainingRegistryConfig:
+    source = path.resolve()
+    payload = yaml.safe_load(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("training registry config root must be a mapping")
+    config = TrainingRegistryConfig.model_validate(payload)
+    base = source.parent
+    return config.model_copy(
+        update={
+            "registry_path": (base / config.registry_path).resolve(),
+            "artifact_root": (base / config.artifact_root).resolve(),
             "outcome_root": (base / config.outcome_root).resolve(),
         }
     )

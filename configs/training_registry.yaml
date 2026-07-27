@@ -1,0 +1,6 @@
+schema_version: goal1.5/training-registry-config/v1
+registry_path: ../data/model_registry/goal15.sqlite
+artifact_root: ../artifacts/registry
+outcome_root: ../data/outcomes
+random_state: 20260725
+korean_router_version: ko-v1

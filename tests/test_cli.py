@@ -15,6 +15,7 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
         "factory",
         "materialize-synthetic",
         "prepare",
+        "registry",
         "run-all",
         "train",
     }
@@ -45,3 +46,20 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
     )
     assert factory.factory_command == "run"
     assert str(factory.output_receipt) == "receipt.json"
+
+    registry = parser.parse_args(
+        [
+            "registry",
+            "run-stage",
+            "--stage",
+            "stage-model",
+            "--run-id",
+            "run-1",
+            "--input-receipt",
+            "input.json",
+            "--output-receipt",
+            "output.json",
+        ]
+    )
+    assert registry.registry_command == "run-stage"
+    assert registry.stage == "stage-model"

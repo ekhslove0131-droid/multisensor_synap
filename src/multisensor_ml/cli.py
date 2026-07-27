@@ -8,6 +8,7 @@ from typing import cast
 from multisensor_ml.factory import run_synthetic_factory
 from multisensor_ml.knime import export_knime_artifacts
 from multisensor_ml.materialize import materialize_synthetic
+from multisensor_ml.model_registry import ModelRegistry, import_oracle_bundle
 from multisensor_ml.pipeline import (
     PreparedSeries,
     evaluate_prepared_bundle,
@@ -15,7 +16,11 @@ from multisensor_ml.pipeline import (
     train_prepared,
 )
 from multisensor_ml.receipts import validate_stage_receipt
-from multisensor_ml.settings import load_factory_config, load_goal15_config
+from multisensor_ml.settings import (
+    load_factory_config,
+    load_goal15_config,
+    load_training_registry_config,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +37,70 @@ def build_parser() -> argparse.ArgumentParser:
     factory_run.add_argument("--output-receipt", type=Path, required=True)
     factory_validate = factory_commands.add_parser("validate")
     factory_validate.add_argument("--receipt", type=Path, required=True)
+
+    registry = subparsers.add_parser("registry")
+    registry_commands = registry.add_subparsers(dest="registry_command", required=True)
+    registry_init = registry_commands.add_parser("init")
+    registry_init.add_argument("--config", type=Path, required=True)
+    registry_import = registry_commands.add_parser("import-oracle")
+    registry_import.add_argument("--experiment", required=True)
+    registry_import.add_argument("--project-root", type=Path, default=Path.cwd())
+    registry_import.add_argument(
+        "--registry-path",
+        type=Path,
+        default=Path("data/model_registry/goal15.sqlite"),
+    )
+    registry_stage = registry_commands.add_parser("run-stage")
+    registry_stage.add_argument(
+        "--stage",
+        choices=(
+            "labels",
+            "baseline",
+            "types",
+            "stage-model",
+            "behavior-model",
+            "evaluate",
+            "predict",
+            "route-ko",
+        ),
+        required=True,
+    )
+    registry_stage.add_argument("--run-id", required=True)
+    registry_stage.add_argument("--input-receipt", type=Path, required=True)
+    registry_stage.add_argument("--output-receipt", type=Path, required=True)
+    registry_run_all = registry_commands.add_parser("run-all")
+    registry_run_all.add_argument("--config", type=Path, required=True)
+    registry_compare = registry_commands.add_parser("compare")
+    registry_compare.add_argument("--target", required=True)
+    registry_compare.add_argument(
+        "--registry-path",
+        type=Path,
+        default=Path("data/model_registry/goal15.sqlite"),
+    )
+    registry_promote = registry_commands.add_parser("promote")
+    registry_promote.add_argument("--release", required=True)
+    registry_promote.add_argument("--audit-reason", required=True)
+    registry_promote.add_argument(
+        "--registry-path",
+        type=Path,
+        default=Path("data/model_registry/goal15.sqlite"),
+    )
+    registry_predict = registry_commands.add_parser("predict")
+    registry_predict.add_argument("--release", required=True)
+    registry_predict.add_argument("--dataset", required=True)
+    registry_predict.add_argument(
+        "--registry-path",
+        type=Path,
+        default=Path("data/model_registry/goal15.sqlite"),
+    )
+    registry_export = registry_commands.add_parser("export-knime")
+    registry_export.add_argument("--run-id", required=True)
+    registry_export.add_argument("--project-root", type=Path, default=Path.cwd())
+    registry_export.add_argument(
+        "--registry-path",
+        type=Path,
+        default=Path("data/model_registry/goal15.sqlite"),
+    )
 
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--series", required=True)
@@ -95,6 +164,49 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         raise AssertionError(f"unhandled factory command: {args.factory_command}")
+
+    if args.command == "registry":
+        if args.registry_command == "init":
+            registry_config = load_training_registry_config(args.config)
+            model_registry = ModelRegistry(registry_config.registry_path)
+            model_registry.initialize()
+            _emit(
+                status="INITIALIZED",
+                registry=str(registry_config.registry_path),
+            )
+            return 0
+        if args.registry_command == "import-oracle":
+            project = args.project_root.resolve()
+            registry_path = (
+                args.registry_path
+                if args.registry_path.is_absolute()
+                else project / args.registry_path
+            )
+            model_registry = ModelRegistry(registry_path)
+            model_registry.initialize()
+            release_id = import_oracle_bundle(
+                model_registry,
+                project / "artifacts" / args.experiment,
+            )
+            _emit(
+                status="IMPORTED",
+                release_id=release_id,
+                registry=str(registry_path.resolve()),
+            )
+            return 0
+        if args.registry_command == "promote":
+            model_registry = ModelRegistry(args.registry_path)
+            model_registry.initialize()
+            model_registry.promote_release(
+                args.release,
+                audit_reason=args.audit_reason,
+            )
+            _emit(
+                status="champion",
+                release_id=args.release,
+                registry=str(args.registry_path.resolve()),
+            )
+            return 0
 
     if args.command == "materialize-synthetic":
         goal_config = load_goal15_config(args.config)
