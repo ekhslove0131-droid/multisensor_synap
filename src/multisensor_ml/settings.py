@@ -43,6 +43,10 @@ class TrainingRegistryConfig(BaseModel):
     registry_path: Path
     artifact_root: Path
     outcome_root: Path
+    data_root: Path
+    series_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    input_receipt: Path
     random_state: int = 20260725
     korean_router_version: str = Field(min_length=1)
 
@@ -92,5 +96,7 @@ def load_training_registry_config(path: Path) -> TrainingRegistryConfig:
             "registry_path": (base / config.registry_path).resolve(),
             "artifact_root": (base / config.artifact_root).resolve(),
             "outcome_root": (base / config.outcome_root).resolve(),
+            "data_root": (base / config.data_root).resolve(),
+            "input_receipt": (base / config.input_receipt).resolve(),
         }
     )

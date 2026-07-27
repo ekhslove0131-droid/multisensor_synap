@@ -16,6 +16,11 @@ from multisensor_ml.pipeline import (
     train_prepared,
 )
 from multisensor_ml.receipts import validate_stage_receipt
+from multisensor_ml.registry_workflow import (
+    export_registry_knime_tables,
+    run_registry_all,
+    run_registry_stage,
+)
 from multisensor_ml.settings import (
     load_factory_config,
     load_goal15_config,
@@ -68,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
     registry_stage.add_argument("--run-id", required=True)
     registry_stage.add_argument("--input-receipt", type=Path, required=True)
     registry_stage.add_argument("--output-receipt", type=Path, required=True)
+    registry_stage.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/training_registry.yaml"),
+    )
     registry_run_all = registry_commands.add_parser("run-all")
     registry_run_all.add_argument("--config", type=Path, required=True)
     registry_compare = registry_commands.add_parser("compare")
@@ -207,6 +217,82 @@ def main(argv: list[str] | None = None) -> int:
                 registry=str(args.registry_path.resolve()),
             )
             return 0
+        if args.registry_command == "run-stage":
+            registry_config = load_training_registry_config(args.config)
+            receipt = run_registry_stage(
+                registry_config,
+                stage=args.stage,
+                run_id=args.run_id,
+                input_receipt=args.input_receipt,
+                output_receipt=args.output_receipt,
+            )
+            _emit(
+                status=receipt.status,
+                stage=receipt.stage_id,
+                run_id=receipt.pipeline_run_id,
+                receipt=str(args.output_receipt.resolve()),
+                message_ko=receipt.message_ko,
+            )
+            return 0
+        if args.registry_command == "run-all":
+            registry_config = load_training_registry_config(args.config)
+            result = run_registry_all(registry_config)
+            _emit(
+                status=result.status,
+                real_data_status="NOT VERIFIED",
+                run_id=result.run_id,
+                series_id=result.series_id,
+                release_id=result.release_id,
+                final_receipt=str(result.final_receipt.resolve()),
+            )
+            return 0
+        if args.registry_command == "compare":
+            kind_aliases = {
+                "stage": "stage_model",
+                "behavior": "behavior_model",
+                "types": "standard_type",
+                "labels": "label_set",
+            }
+            kind = kind_aliases.get(args.target, args.target)
+            model_registry = ModelRegistry(args.registry_path)
+            model_registry.initialize()
+            _emit(target=args.target, versions=model_registry.list_versions(kind=kind))
+            return 0
+        if args.registry_command == "predict":
+            model_registry = ModelRegistry(args.registry_path)
+            model_registry.initialize()
+            release = model_registry.release_details(args.release)
+            dataset_version = str(release["dataset_version"])
+            if args.dataset not in {
+                dataset_version,
+                dataset_version.removeprefix("dataset-"),
+            } and args.dataset not in dataset_version:
+                raise ValueError(
+                    f"release dataset {dataset_version!r} does not match {args.dataset!r}"
+                )
+            predictions = model_registry.list_versions(kind="prediction")
+            _emit(
+                status="AVAILABLE" if predictions else "NOT_AVAILABLE",
+                release_id=args.release,
+                dataset_version=dataset_version,
+                prediction_versions=predictions,
+            )
+            return 0
+        if args.registry_command == "export-knime":
+            project = args.project_root.resolve()
+            config_path = project / "configs" / "training_registry.yaml"
+            registry_config = load_training_registry_config(config_path)
+            export = export_registry_knime_tables(
+                registry_config,
+                run_id=args.run_id,
+            )
+            _emit(
+                status="EXPORTED",
+                run_id=args.run_id,
+                knime_export=str(export.resolve()),
+            )
+            return 0
+        raise AssertionError(f"unhandled registry command: {args.registry_command}")
 
     if args.command == "materialize-synthetic":
         goal_config = load_goal15_config(args.config)

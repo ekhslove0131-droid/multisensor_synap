@@ -95,6 +95,10 @@ def test_locked_test_registration_rejects_duplicate_model_dataset_pair(
             dataset_sha256="b" * 64,
             audit_reason="attempted duplicate acceptance",
         )
+    assert registry.locked_test_exists(
+        model_sha256="a" * 64,
+        dataset_sha256="b" * 64,
+    )
 
 
 def test_import_oracle_bundle_creates_an_explicit_legacy_candidate(
@@ -137,6 +141,10 @@ schema_version: goal1.5/training-registry-config/v1
 registry_path: ../runtime/goal15.sqlite
 artifact_root: ../artifacts
 outcome_root: ../outcomes
+data_root: ../data
+series_id: quick12-oracle-v1
+run_id: training-quick12-v1
+input_receipt: ../outcomes/quick12-oracle-v1/factory-receipt.json
 random_state: 17
 korean_router_version: ko-v1
 """.lstrip()
@@ -147,6 +155,10 @@ korean_router_version: ko-v1
     assert loaded.registry_path == (config.parent / "../runtime/goal15.sqlite").resolve()
     assert loaded.artifact_root == (config.parent / "../artifacts").resolve()
     assert loaded.outcome_root == (config.parent / "../outcomes").resolve()
+    assert loaded.data_root == (config.parent / "../data").resolve()
+    assert loaded.input_receipt == (
+        config.parent / "../outcomes/quick12-oracle-v1/factory-receipt.json"
+    ).resolve()
 
 
 def test_registry_records_a_validated_stage_receipt_once(tmp_path: Path) -> None:

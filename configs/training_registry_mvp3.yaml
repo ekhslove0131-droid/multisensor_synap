@@ -3,8 +3,8 @@ registry_path: ../data/model_registry/goal15.sqlite
 artifact_root: ../artifacts/registry
 outcome_root: ../data/outcomes
 data_root: ../data
-series_id: quick12-oracle-v1
-run_id: training-quick12-v1
-input_receipt: ../data/outcomes/quick12-oracle-v1/factory-receipt.json
+series_id: mvp3-oracle-v1
+run_id: training-mvp3-v1
+input_receipt: ../data/outcomes/mvp3-oracle-v1/factory-receipt.json
 random_state: 20260725
 korean_router_version: ko-v1

@@ -10,7 +10,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import skops.io as sio
-from sklearn.metrics import f1_score
+from sklearn.metrics import average_precision_score, f1_score
 
 from multisensor_ml.contracts import assert_oracle_columns
 from multisensor_ml.hierarchical import (
@@ -28,6 +28,8 @@ from multisensor_ml.models import (
 )
 from multisensor_ml.outcomes import BEHAVIOR_CODES
 from multisensor_ml.registry import sha256_file
+from multisensor_ml.result_router import BEHAVIOR_KO, route_prediction_ko
+from multisensor_ml.stress import StressScenario, apply_stress
 
 STAGE_MODEL_SCHEMA = "goal1.5/hierarchical-stage-model/v1"
 BEHAVIOR_MODEL_SCHEMA = "goal1.5/behavior-model/v1"
@@ -44,6 +46,24 @@ class StageModelArtifacts:
 
 @dataclass(frozen=True, slots=True)
 class BehaviorModelArtifacts:
+    root: Path
+    manifest_json: Path
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationArtifacts:
+    root: Path
+    manifest_json: Path
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionArtifacts:
+    root: Path
+    manifest_json: Path
+
+
+@dataclass(frozen=True, slots=True)
+class KoreanRouterArtifacts:
     root: Path
     manifest_json: Path
 
@@ -768,3 +788,487 @@ def fit_behavior_model_artifacts(
         encoding="utf-8",
     )
     return BehaviorModelArtifacts(root=root, manifest_json=manifest_path)
+
+
+def _load_behavior_models(
+    behavior_root: Path,
+) -> tuple[dict[str, object], dict[str, ProbabilityClassifier]]:
+    manifest = _read_json(behavior_root / "manifest.json")
+    entries = cast(list[dict[str, object]], manifest["models"])
+    selected = cast(dict[str, str], manifest["selected_models"])
+    models: dict[str, ProbabilityClassifier] = {}
+    for code, selected_name in selected.items():
+        entry = next(
+            value
+            for value in entries
+            if value["behavior_code"] == code
+            and value["model_name"] == selected_name
+        )
+        path = behavior_root / str(entry["path"])
+        discovered = sorted(sio.get_untrusted_types(file=path))
+        declared = sorted(cast(list[str], entry["unknown_types"]))
+        if discovered != declared:
+            raise ValueError(f"skops unknown type mismatch: {path}")
+        models[code] = cast(ProbabilityClassifier, sio.load(path, trusted=declared))
+    return manifest, models
+
+
+def evaluate_hierarchical_artifacts(
+    prepared_root: Path,
+    outcome_root: Path,
+    standard_type_root: Path,
+    stage_model_root: Path,
+    behavior_model_root: Path,
+    output_root: Path,
+    *,
+    random_state: int,
+) -> EvaluationArtifacts:
+    """Evaluate the selected release once on locked test and run validation stress."""
+
+    root = output_root.resolve()
+    if root.exists():
+        raise FileExistsError(f"evaluation artifact root already exists: {root}")
+    root.mkdir(parents=True)
+    stage_manifest, event_model, stage_model = _load_selected_stage_models(
+        stage_model_root
+    )
+    behavior_manifest, behavior_models = _load_behavior_models(behavior_model_root)
+    prepared_manifest = _read_json(prepared_root / "manifest.json")
+    people = cast(list[dict[str, object]], prepared_manifest["people"])
+    base_features = [
+        str(value)
+        for value in cast(list[object], prepared_manifest["feature_names"])
+    ]
+    memberships, ood, type_features = _membership_context(standard_type_root)
+    feature_names = [*base_features, *type_features]
+    locked_entries = [
+        entry for entry in people if entry["split_role"] == "locked_test"
+    ]
+    threshold = float(
+        cast(str | float | int, stage_manifest["event_threshold"])
+    )
+    stage_to_index = {stage: index for index, stage in enumerate(MODEL_STAGE_CODES)}
+    event_truth_parts: list[np.ndarray] = []
+    event_probability_parts: list[np.ndarray] = []
+    stage_truth_parts: list[np.ndarray] = []
+    stage_predicted_parts: list[np.ndarray] = []
+    locked_prediction_parts: list[pd.DataFrame] = []
+    validation_stress_source: list[pd.DataFrame] = []
+
+    for entry in locked_entries:
+        frame = _read_labeled_person(
+            prepared_root,
+            outcome_root,
+            entry,
+            feature_names=base_features,
+            memberships=memberships,
+            type_features=type_features,
+        )
+        matrix = frame[feature_names].to_numpy(dtype=np.float32)
+        truth = np.asarray(
+            frame["stage_code"].astype(str) != "NO_EVENT", dtype=np.int8
+        )
+        event_probability = event_model.predict_proba(matrix)[:, 1].astype(np.float64)
+        stage_probability = _aligned_stage_probability(stage_model, matrix)
+        event_truth_parts.append(truth)
+        event_probability_parts.append(event_probability)
+        event_mask = truth.astype(bool)
+        stage_truth_parts.append(
+            np.asarray(
+                frame.loc[event_mask, "stage_code"].astype(str).map(stage_to_index),
+                dtype=np.int8,
+            )
+        )
+        stage_predicted_parts.append(
+            np.argmax(stage_probability[event_mask], axis=1).astype(np.int8)
+        )
+        ood_row = ood.loc[
+            ood["person_key"].astype(str) == str(entry["person_key"])
+        ]
+        ood_status = (
+            str(ood_row.iloc[0]["status"])
+            if len(ood_row) == 1
+            else "NOT_DECISIONABLE"
+        )
+        valid = np.full(
+            len(frame),
+            ood_status not in {"NOT_DECISIONABLE", "RETRAIN_CANDIDATE"},
+            dtype=bool,
+        )
+        predicted = decode_stage_sequence(
+            event_probability,
+            stage_probability,
+            event_threshold=threshold,
+            valid_mask=valid,
+        )
+        retained = frame[
+            [
+                "person_key",
+                "run_id",
+                "person_id",
+                "timestamp_utc",
+                "event_id",
+                "stage_code",
+            ]
+        ].copy()
+        retained["split_role"] = "locked_test"
+        retained["event_probability"] = event_probability
+        retained["predicted_stage"] = predicted
+        retained["ood_status"] = ood_status
+        locked_prediction_parts.append(retained)
+
+    event_truth = np.concatenate(event_truth_parts)
+    event_probability = np.concatenate(event_probability_parts)
+    duration_hours = max(len(event_truth) / 3600, 1 / 3600)
+    event_metrics = evaluate_probabilities(
+        event_truth,
+        event_probability,
+        threshold=threshold,
+        duration_hours=duration_hours,
+    )
+    stage_truth = np.concatenate(stage_truth_parts)
+    stage_predicted = np.concatenate(stage_predicted_parts)
+    stage_macro_f1 = float(
+        f1_score(
+            stage_truth,
+            stage_predicted,
+            labels=list(range(len(MODEL_STAGE_CODES))),
+            average="macro",
+            zero_division=0,
+        )
+    )
+    metric_rows: list[dict[str, object]] = [
+        {
+            "head": "event",
+            "role": "locked_test",
+            "model_name": stage_manifest["selected_event_model"],
+            "threshold": threshold,
+            **{
+                key: value
+                for key, value in event_metrics.items()
+                if isinstance(value, int | float)
+            },
+        },
+        {
+            "head": "stage",
+            "role": "locked_test",
+            "model_name": stage_manifest["selected_stage_model"],
+            "macro_f1": stage_macro_f1,
+        },
+    ]
+    _write_parquet(
+        pd.DataFrame(metric_rows),
+        root / "locked_test_metrics.parquet",
+    )
+    _write_parquet(
+        pd.concat(locked_prediction_parts, ignore_index=True),
+        root / "locked_test_stage_predictions.parquet",
+    )
+
+    event_frame, stage_features, _ = _event_feature_frame(
+        prepared_root,
+        outcome_root,
+        standard_type_root,
+    )
+    locked_events = event_frame.loc[
+        event_frame["split_role"] == "locked_test"
+    ].copy()
+    locked_stage_matrix = locked_events[stage_features].to_numpy(dtype=np.float32)
+    locked_events["event_oof_probability"] = event_model.predict_proba(
+        locked_stage_matrix
+    )[:, 1]
+    behavior_features = [*stage_features, "event_oof_probability"]
+    behavior_metric_rows: list[dict[str, object]] = []
+    behavior_audit_rows: list[dict[str, object]] = []
+    support = cast(dict[str, str], behavior_manifest["support_status"])
+    selected_models = cast(dict[str, str], behavior_manifest["selected_models"])
+    behavior_matrix = locked_events[behavior_features].to_numpy(dtype=np.float32)
+    conditional_probability = _aligned_stage_probability(
+        stage_model, locked_stage_matrix
+    )
+    event_score = locked_events["event_oof_probability"].to_numpy(dtype=np.float64)
+    predicted_stage = [
+        (
+            MODEL_STAGE_CODES[int(np.argmax(conditional_probability[index]))]
+            if event_score[index] >= threshold
+            else "NO_EVENT"
+        )
+        for index in range(len(locked_events))
+    ]
+    records = locked_events.reset_index(drop=True).to_dict(orient="records")
+    for code in sorted(BEHAVIOR_CODES):
+        truth = locked_events[code].to_numpy(dtype=np.int8)
+        if code in behavior_models:
+            probability = behavior_models[code].predict_proba(behavior_matrix)[:, 1]
+            behavior_metric_rows.append(
+                {
+                    "head": "behavior",
+                    "role": "locked_test",
+                    "behavior_code": code,
+                    "model_name": selected_models[code],
+                    "status": "SUPPORTED",
+                    "positive_count": int(truth.sum()),
+                    "aucpr": float(average_precision_score(truth, probability)),
+                    "f1": float(
+                        f1_score(
+                            truth,
+                            probability >= 0.5,
+                            zero_division=0,
+                        )
+                    ),
+                }
+            )
+        else:
+            probability = np.full(len(locked_events), np.nan, dtype=np.float64)
+            behavior_metric_rows.append(
+                {
+                    "head": "behavior",
+                    "role": "locked_test",
+                    "behavior_code": code,
+                    "model_name": None,
+                    "status": support[code],
+                    "positive_count": int(truth.sum()),
+                    "aucpr": np.nan,
+                    "f1": np.nan,
+                }
+            )
+        for index, record in enumerate(records):
+            behavior_audit_rows.append(
+                {
+                    "person_key": str(record["person_key"]),
+                    "run_id": str(record["run_id"]),
+                    "person_id": str(record["person_id"]),
+                    "event_id": str(record["event_id"]),
+                    "event_time_utc": record["event_time_utc"],
+                    "split_role": "locked_test",
+                    "event_probability": float(event_score[index]),
+                    "predicted_stage": predicted_stage[index],
+                    "ood_status": str(record["ood_status"]),
+                    "behavior_code": code,
+                    "observed_label": int(record[code]),
+                    "behavior_probability": float(probability[index]),
+                    "support_status": support[code],
+                    "selected_model": selected_models.get(code),
+                }
+            )
+    _write_parquet(
+        pd.DataFrame(behavior_metric_rows),
+        root / "locked_test_behavior_metrics.parquet",
+    )
+    _write_parquet(
+        pd.DataFrame(behavior_audit_rows),
+        root / "locked_test_behavior_audit.parquet",
+    )
+
+    validation_entries = [
+        entry for entry in people if entry["split_role"] == "validation"
+    ]
+    for entry in validation_entries:
+        frame = _read_labeled_person(
+            prepared_root,
+            outcome_root,
+            entry,
+            feature_names=base_features,
+            memberships=memberships,
+            type_features=type_features,
+        )
+        validation_stress_source.append(frame)
+    stress_frame = pd.concat(validation_stress_source, ignore_index=True)
+    if len(stress_frame) > 50_000:
+        stress_frame = stress_frame.iloc[
+            np.linspace(0, len(stress_frame) - 1, 50_000, dtype=np.int64)
+        ].reset_index(drop=True)
+    stress_truth = np.asarray(
+        stress_frame["stage_code"].astype(str) != "NO_EVENT", dtype=np.int8
+    )
+    clean_probability = event_model.predict_proba(
+        stress_frame[feature_names].to_numpy(dtype=np.float32)
+    )[:, 1]
+    clean_aucpr = float(average_precision_score(stress_truth, clean_probability))
+    scenarios = [
+        *(StressScenario("gaussian", value, random_state) for value in (0.05, 0.10, 0.20)),
+        *(StressScenario("block_missing", value, random_state) for value in (5, 30, 120)),
+        *(StressScenario("time_shift", value, random_state) for value in (-5, -1, 1, 5)),
+        StressScenario("latent_dropout", 1, random_state),
+        StressScenario("latent_dropout", 2, random_state),
+        StressScenario("latent_dropout", 3, random_state),
+    ]
+    stress_rows: list[dict[str, object]] = []
+    for scenario in scenarios:
+        perturbed = apply_stress(stress_frame[feature_names], scenario)
+        probability = event_model.predict_proba(
+            perturbed.to_numpy(dtype=np.float32)
+        )[:, 1]
+        metrics = evaluate_probabilities(
+            stress_truth,
+            probability,
+            threshold=threshold,
+            duration_hours=max(len(stress_truth) / 3600, 1 / 3600),
+        )
+        aucpr = float(cast(float | int, metrics["aucpr"]))
+        stress_rows.append(
+            {
+                "scenario": scenario.kind,
+                "magnitude": scenario.magnitude,
+                "aucpr": aucpr,
+                "event_recall": metrics["event_recall"],
+                "false_alerts_per_hour": metrics["false_alerts_per_hour"],
+                "brier_score": metrics["brier_score"],
+                "calibration_error": metrics["calibration_error"],
+                "aucpr_degradation": (
+                    (clean_aucpr - aucpr) / clean_aucpr if clean_aucpr else 0.0
+                ),
+                "sample_rows": len(stress_truth),
+            }
+        )
+    _write_parquet(pd.DataFrame(stress_rows), root / "stress_metrics.parquet")
+    files = {
+        path.name: sha256_file(path)
+        for path in sorted(root.iterdir())
+        if path.is_file()
+    }
+    manifest_path = root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "goal1.5/hierarchical-evaluation/v1",
+                "status": "oracle/sanity",
+                "real_data_status": "NOT VERIFIED",
+                "locked_test_executed": True,
+                "locked_test_person_count": len(locked_entries),
+                "stress_scope": "deterministic_validation_sample_max_50000",
+                "files": files,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return EvaluationArtifacts(root=root, manifest_json=manifest_path)
+
+
+def create_prediction_artifacts(
+    behavior_model_root: Path,
+    evaluation_root: Path,
+    output_root: Path,
+) -> PredictionArtifacts:
+    root = output_root.resolve()
+    if root.exists():
+        raise FileExistsError(f"prediction artifact root already exists: {root}")
+    root.mkdir(parents=True)
+    validation = pq.read_table(
+        behavior_model_root / "event_prediction_audit.parquet"
+    ).to_pandas()
+    locked = pq.read_table(
+        evaluation_root / "locked_test_behavior_audit.parquet"
+    ).to_pandas()
+    combined = pd.concat([validation, locked], ignore_index=True)
+    _write_parquet(combined, root / "event_prediction_audit.parquet")
+    manifest_path = root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "goal1.5/prediction-run/v1",
+                "status": "oracle/sanity",
+                "real_data_status": "NOT VERIFIED",
+                "row_count": len(combined),
+                "files": {
+                    "event_prediction_audit.parquet": sha256_file(
+                        root / "event_prediction_audit.parquet"
+                    )
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return PredictionArtifacts(root=root, manifest_json=manifest_path)
+
+
+def create_korean_router_artifacts(
+    prediction_root: Path,
+    output_root: Path,
+    *,
+    router_version: str,
+) -> KoreanRouterArtifacts:
+    root = output_root.resolve()
+    if root.exists():
+        raise FileExistsError(f"router artifact root already exists: {root}")
+    root.mkdir(parents=True)
+    if set(BEHAVIOR_KO) != set(BEHAVIOR_CODES):
+        missing = sorted(set(BEHAVIOR_CODES) - set(BEHAVIOR_KO))
+        raise ValueError(f"한국어 행동 번역 누락: {missing}")
+    audit = pq.read_table(
+        prediction_root / "event_prediction_audit.parquet"
+    ).to_pandas()
+    routed_rows: list[dict[str, object]] = []
+    group_columns = [
+        "person_key",
+        "run_id",
+        "person_id",
+        "event_id",
+        "event_time_utc",
+        "split_role",
+        "event_probability",
+        "predicted_stage",
+        "ood_status",
+    ]
+    for keys, event in audit.groupby(group_columns, dropna=False, sort=True):
+        values = dict(zip(group_columns, keys, strict=True))
+        probabilities = {
+            str(row["behavior_code"]): float(row["behavior_probability"])
+            for row in event.to_dict(orient="records")
+            if pd.notna(row["behavior_probability"])
+        }
+        routed = route_prediction_ko(
+            {
+                "event_probability": float(values["event_probability"]),
+                "stage_code": str(values["predicted_stage"]),
+                "ood_status": str(values["ood_status"]),
+                "behavior_probabilities": probabilities,
+            },
+            router_version=router_version,
+        )
+        routed_rows.append(
+            {
+                **values,
+                "라우터버전": router_version,
+                "판정": routed["판정"],
+                "단계": routed["단계"],
+                "분포상태": routed["분포상태"],
+                "행동확률_json": json.dumps(
+                    routed["행동확률"], ensure_ascii=False, sort_keys=True
+                ),
+                "raw_behavior_probabilities_json": json.dumps(
+                    probabilities, sort_keys=True
+                ),
+            }
+        )
+    _write_parquet(pd.DataFrame(routed_rows), root / "korean_results.parquet")
+    manifest_path = root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "goal1.5/korean-result-router/v1",
+                "status": "oracle/sanity",
+                "real_data_status": "NOT VERIFIED",
+                "router_version": router_version,
+                "translation_complete": True,
+                "result_rows": len(routed_rows),
+                "files": {
+                    "korean_results.parquet": sha256_file(
+                        root / "korean_results.parquet"
+                    )
+                },
+            },
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return KoreanRouterArtifacts(root=root, manifest_json=manifest_path)

@@ -298,6 +298,24 @@ class ModelRegistry:
                 "duplicate locked_test for model/dataset hash pair"
             ) from exc
 
+    def locked_test_exists(
+        self,
+        *,
+        model_sha256: str,
+        dataset_sha256: str,
+    ) -> bool:
+        _validate_sha256(model_sha256, "model_sha256")
+        _validate_sha256(dataset_sha256, "dataset_sha256")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM locked_test_runs
+                WHERE model_sha256 = ? AND dataset_sha256 = ?
+                """,
+                (model_sha256, dataset_sha256),
+            ).fetchone()
+        return row is not None
+
     def record_stage_receipt(
         self,
         receipt_path: Path,
@@ -336,6 +354,43 @@ class ModelRegistry:
                 ),
             )
         return "CREATED"
+
+    def list_versions(self, *, kind: str | None = None) -> list[dict[str, object]]:
+        if kind is not None and kind not in VERSION_KINDS:
+            raise ValueError(f"unsupported version kind: {kind}")
+        query = """
+            SELECT version_id, kind, artifact_uri, artifact_sha256,
+                   metadata_json, created_at
+            FROM artifact_versions
+        """
+        parameters: tuple[str, ...] = ()
+        if kind is not None:
+            query += " WHERE kind = ?"
+            parameters = (kind,)
+        query += " ORDER BY created_at, version_id"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [
+            {
+                "version_id": row["version_id"],
+                "kind": row["kind"],
+                "artifact_uri": row["artifact_uri"],
+                "artifact_sha256": row["artifact_sha256"],
+                "metadata": json.loads(row["metadata_json"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def release_details(self, release_id: str) -> dict[str, object]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM releases WHERE release_id = ?",
+                (release_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"unknown release: {release_id}")
+        return {key: row[key] for key in row}
 
 
 def import_oracle_bundle(registry: ModelRegistry, bundle_root: Path) -> str:
