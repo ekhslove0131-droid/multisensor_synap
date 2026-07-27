@@ -250,7 +250,6 @@ def fit_stage_model_artifacts(
         )
     )
 
-    validation_people: list[pd.DataFrame] = []
     event_truth_parts: list[np.ndarray] = []
     event_probability_parts: dict[str, list[np.ndarray]] = {
         name: [] for name in event_models
@@ -271,7 +270,6 @@ def fit_stage_model_artifacts(
         frame["event_gate"] = (
             frame["stage_code"].astype(str) != "NO_EVENT"
         ).astype(np.int8)
-        validation_people.append(frame)
         matrix = frame[feature_names].to_numpy(dtype=np.float32)
         truth = frame["event_gate"].to_numpy(dtype=np.int8)
         event_truth_parts.append(truth)
@@ -362,11 +360,19 @@ def fit_stage_model_artifacts(
     _, selected_stage = max(stage_scores)
 
     prediction_parts: list[pd.DataFrame] = []
-    for frame, event_probability in zip(
-        validation_people,
+    for entry, event_probability in zip(
+        validation_entries,
         event_probability_parts[selected_event],
         strict=True,
     ):
+        frame = _read_labeled_person(
+            prepared_root,
+            outcome_root,
+            entry,
+            feature_names=base_features,
+            memberships=memberships,
+            type_features=type_features,
+        )
         matrix = frame[feature_names].to_numpy(dtype=np.float32)
         stage_probability = _aligned_stage_probability(
             stage_models[selected_stage], matrix
@@ -1063,6 +1069,10 @@ def evaluate_hierarchical_artifacts(
     validation_entries = [
         entry for entry in people if entry["split_role"] == "validation"
     ]
+    per_person_stress_rows = max(
+        1,
+        int(np.ceil(50_000 / max(len(validation_entries), 1))),
+    )
     for entry in validation_entries:
         frame = _read_labeled_person(
             prepared_root,
@@ -1072,6 +1082,15 @@ def evaluate_hierarchical_artifacts(
             memberships=memberships,
             type_features=type_features,
         )
+        if len(frame) > per_person_stress_rows:
+            frame = frame.iloc[
+                np.linspace(
+                    0,
+                    len(frame) - 1,
+                    per_person_stress_rows,
+                    dtype=np.int64,
+                )
+            ].reset_index(drop=True)
         validation_stress_source.append(frame)
     stress_frame = pd.concat(validation_stress_source, ignore_index=True)
     if len(stress_frame) > 50_000:

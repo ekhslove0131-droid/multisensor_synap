@@ -43,6 +43,17 @@ multisensor-ml train --experiment <yaml>
 multisensor-ml evaluate --bundle <dir> --dataset <id> --role validation|locked_test
 multisensor-ml export-knime --experiment <id>
 multisensor-ml run-all --config <yaml>
+multisensor-ml factory run --config <yaml> --output-receipt <json>
+multisensor-ml factory validate --receipt <json>
+multisensor-ml registry init --config <yaml>
+multisensor-ml registry import-oracle --experiment <id>
+multisensor-ml registry run-stage --stage <stage> --run-id <id> \
+  --input-receipt <json> --output-receipt <json>
+multisensor-ml registry run-all --config <yaml>
+multisensor-ml registry compare --target <target>
+multisensor-ml registry promote --release <id> --audit-reason <text>
+multisensor-ml registry predict --release <id> --dataset <id>
+multisensor-ml registry export-knime --run-id <id>
 ```
 
 `locked_test` 재평가에는 `--audit-reason`이 필요하며, 동일 model hash와
@@ -64,8 +75,12 @@ dataset hash 조합은 두 번 실행할 수 없습니다.
 
 상세 내용은 [아키텍처](docs/ARCHITECTURE.md),
 [KNIME 사용법](docs/KNIME.md), [MVP 결과](docs/RESULTS_MVP3.md)를 참고하세요.
-KNIME 5.12에서 바로 가져올 파일은
-[Multisensor_ML_Goal1_5.knwf](knime/Multisensor_ML_Goal1_5.knwf)입니다.
+합성 공장과 계층형 학습 레지스트리 사용법은
+[한국어 KNIME 안내](docs/KNIME_FACTORY_AND_REGISTRY_KO.md)를 참고하세요.
+기존 [Multisensor_ML_Goal1_5.knwf](knime/Multisensor_ML_Goal1_5.knwf)는
+Oracle Benchmark로 보존하며, 새 워크플로는
+[합성데이터 공장](knime/Multisensor_Synthetic_Factory_Goal1_5.knwf)과
+[학습 레지스트리](knime/Multisensor_ML_Training_Registry.knwf)입니다.
 
 ## 안전한 번들
 

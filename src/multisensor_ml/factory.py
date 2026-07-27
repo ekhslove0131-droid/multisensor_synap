@@ -19,7 +19,11 @@ from multisensor_ml.outcomes import (
     build_stage_labels,
     load_behavior_ontology,
 )
-from multisensor_ml.receipts import StageReceipt, create_stage_receipt
+from multisensor_ml.receipts import (
+    StageReceipt,
+    create_stage_receipt,
+    validate_stage_receipt,
+)
 from multisensor_ml.registry import sha256_file
 from multisensor_ml.settings import FactoryConfig, Goal15Config
 
@@ -64,16 +68,35 @@ def run_synthetic_factory(
         json.loads(artifacts.manifest_json.read_text(encoding="utf-8")),
     )
     label_version = str(manifest["factory_input_sha256"])[:24]
+    pipeline_run_id = f"factory-{config.series_id}-{label_version[:12]}"
+    versions = {
+        "dataset_version": config.series_id,
+        "label_version": label_version,
+    }
+    if output_receipt.exists():
+        existing = validate_stage_receipt(output_receipt)
+        if (
+            existing.pipeline_run_id != pipeline_run_id
+            or existing.stage_id != "labels"
+            or Path(existing.artifact_uri).resolve() != artifacts.manifest_json.resolve()
+            or existing.versions != versions
+        ):
+            raise ValueError(
+                f"existing factory receipt conflicts with requested run: {output_receipt}"
+            )
+        return existing.model_copy(
+            update={
+                "status": "REUSED",
+                "message_ko": "기존 합성 라벨과 receipt 재사용",
+            }
+        )
     return create_stage_receipt(
-        pipeline_run_id=f"factory-{config.series_id}-{label_version[:12]}",
+        pipeline_run_id=pipeline_run_id,
         stage_id="labels",
         artifact_uri=artifacts.manifest_json,
         output_path=output_receipt,
         status=artifacts.status,
-        versions={
-            "dataset_version": config.series_id,
-            "label_version": label_version,
-        },
+        versions=versions,
         message_ko=(
             "기존 합성 라벨 재사용"
             if artifacts.status == "REUSED"
