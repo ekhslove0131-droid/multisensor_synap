@@ -2288,7 +2288,7 @@ def _prepared_manifest_preflight_fixture(
                 "dataset_id": "source-extra-00",
             }
         )
-    elif mutation == "resolved_path_alias":
+    elif mutation in {"resolved_path_alias", "valid"}:
         pass
     elif mutation == "missing_extra_person":
         entries[-1] = {
@@ -2322,6 +2322,8 @@ def _prepared_manifest_preflight_fixture(
         alias.symlink_to(f"prepared__people__{entries[0]['dataset_id']}.parquet")
     pd.DataFrame(split).to_parquet(root / "registry__splits.parquet", index=False)
     (root / "prepared__manifest.json").write_text(json.dumps({"people": entries}))
+    (root / "outcomes__manifest.json").write_text("{}")
+    (root / "registry__manifest.json").write_text("{}")
     return entries, split
 
 
@@ -2349,14 +2351,16 @@ def _prepared_manifest_preflight_fixture(
         ),
     ],
 )
+@pytest.mark.parametrize("entrypoint", ["ml", "dl"])
 def test_prepared_manifest_preflight_fails_before_any_writer_or_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
     message: str,
+    entrypoint: str,
 ) -> None:
-    """Every manifest alias/coverage failure must precede both ML/DL writers."""
-    namespace = ml_data_namespace()
+    """Both standalone notebooks must reject the same manifest before outputs."""
+    namespace = ml_data_namespace() if entrypoint == "ml" else dl_sequence_namespace()
     _, split = _prepared_manifest_preflight_fixture(tmp_path, mutation)
     output_root = tmp_path / "output"
     writer_calls = 0
@@ -2366,36 +2370,152 @@ def test_prepared_manifest_preflight_fails_before_any_writer_or_output(
         writer_calls += 1
         raise AssertionError("writer creation occurred before prepared preflight")
 
-    monkeypatch.setitem(
-        namespace,
-        "validate_manifest_hashes",
-        lambda dataset_root: {
-            "prepared__manifest.json": "a" * 64,
-            "outcomes__manifest.json": "b" * 64,
-            "registry__manifest.json": "c" * 64,
-        },
-    )
-    monkeypatch.setitem(namespace, "load_split_registry", lambda dataset_root: split)
     monkeypatch.setitem(namespace["pq"].__dict__, "ParquetWriter", reject_writer)
-    monkeypatch.setitem(
-        namespace,
-        "_load_outcome_labels",
-        lambda dataset_root, run_id, person_id: pd.DataFrame(),
-    )
-    monkeypatch.setitem(
-        namespace,
-        "build_ml_role_view",
-        lambda prepared, labels, split, split_role: pd.DataFrame({"value": [1]}),
-    )
+    if entrypoint == "ml":
+        monkeypatch.setitem(
+            namespace,
+            "validate_manifest_hashes",
+            lambda dataset_root: {
+                "prepared__manifest.json": hashlib.sha256(
+                    (dataset_root / "prepared__manifest.json").read_bytes()
+                ).hexdigest(),
+                "outcomes__manifest.json": "b" * 64,
+                "registry__manifest.json": "c" * 64,
+            },
+        )
+        monkeypatch.setitem(namespace, "load_split_registry", lambda dataset_root: split)
+        monkeypatch.setitem(
+            namespace,
+            "_load_outcome_labels",
+            lambda dataset_root, run_id, person_id: pd.DataFrame(),
+        )
+        monkeypatch.setitem(
+            namespace,
+            "build_ml_role_view",
+            lambda prepared, labels, split, split_role: pd.DataFrame({"value": [1]}),
+        )
+        build_function = namespace["build_all_ml_views"]
+        build_kwargs = {
+            "flat_dataset_root": tmp_path,
+            "output_root": output_root,
+        }
+    else:
+        views_root = tmp_path / "views"
+        views_root.mkdir()
+        (views_root / "view_manifest.json").write_text(
+            json.dumps(
+                {
+                    "series_id": "mvp3-oracle-v1",
+                    "data_status": "oracle/sanity",
+                    "source_dataset_hash": "a" * 64,
+                    "split_hash": "b" * 64,
+                    "source_content_inventory": [],
+                    "source_content_inventory_hash": "c" * 64,
+                }
+            )
+        )
+        build_function = namespace["build_all_sequence_indexes"]
+        build_kwargs = {
+            "flat_dataset_root": tmp_path,
+            "ml_view_root": views_root,
+            "output_root": output_root,
+        }
 
     with pytest.raises(ValueError, match=message):
-        namespace["build_all_ml_views"](
-            flat_dataset_root=tmp_path,
-            output_root=output_root,
-        )
+        build_function(**build_kwargs)
 
     assert writer_calls == 0
     assert not output_root.exists()
+
+
+@pytest.mark.parametrize("entrypoint", ["ml", "dl"])
+@pytest.mark.parametrize("mutation", ["symlink_swap", "stat_change"])
+def test_canonical_source_preflight_rejects_postcheck_path_drift_before_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+    mutation: str,
+) -> None:
+    """Canonical source records must fail closed if path identity later drifts."""
+    source_hash, split_hash = _write_flat_identity_fixture(tmp_path)
+    namespace = ml_data_namespace() if entrypoint == "ml" else dl_sequence_namespace()
+    output_root = tmp_path / "output"
+    writer_calls = 0
+
+    def reject_writer(*args: Any, **kwargs: Any) -> Any:
+        nonlocal writer_calls
+        writer_calls += 1
+        raise AssertionError("writer received bytes from a changed prepared source")
+
+    monkeypatch.setitem(namespace["pq"].__dict__, "ParquetWriter", reject_writer)
+    if entrypoint == "ml":
+        helper_name = "_preflight_prepared_sources"
+        real_preflight = namespace[helper_name]
+        manifest_hashes = {
+            name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+            for name in (
+                "prepared__manifest.json",
+                "outcomes__manifest.json",
+                "registry__manifest.json",
+            )
+        }
+        monkeypatch.setitem(
+            namespace,
+            "validate_manifest_hashes",
+            lambda dataset_root: manifest_hashes,
+        )
+        build_function = namespace["build_all_ml_views"]
+        build_kwargs = {
+            "flat_dataset_root": tmp_path,
+            "output_root": output_root,
+        }
+        source_index = 3
+    else:
+        helper_name = "_preflight_flat_dataset_identity"
+        real_preflight = namespace[helper_name]
+        views_root = tmp_path / "views"
+        views_root.mkdir()
+        inventory, inventory_hash = _FLAT_SOURCE_INVENTORIES[source_hash]
+        (views_root / "view_manifest.json").write_text(
+            json.dumps(
+                {
+                    "series_id": "mvp3-oracle-v1",
+                    "data_status": "oracle/sanity",
+                    "source_dataset_hash": source_hash,
+                    "split_hash": split_hash,
+                    "source_content_inventory": inventory,
+                    "source_content_inventory_hash": inventory_hash,
+                }
+            )
+        )
+        build_function = namespace["build_all_sequence_indexes"]
+        build_kwargs = {
+            "flat_dataset_root": tmp_path,
+            "ml_view_root": views_root,
+            "output_root": output_root,
+        }
+        source_index = 2
+
+    def mutate_after_preflight(*args: Any, **kwargs: Any) -> Any:
+        result = real_preflight(*args, **kwargs)
+        sources = result[source_index]
+        source = sources[0]
+        if mutation == "symlink_swap":
+            source.declared_path.unlink()
+            source.declared_path.symlink_to(sources[1].canonical_path)
+        else:
+            source.canonical_path.write_bytes(
+                source.canonical_path.read_bytes() + b"changed-after-preflight"
+            )
+        return result
+
+    monkeypatch.setitem(namespace, helper_name, mutate_after_preflight)
+
+    with pytest.raises(ValueError, match="changed after preflight"):
+        build_function(**build_kwargs)
+
+    assert writer_calls == 0
+    assert not output_root.exists() or not list(output_root.iterdir())
 
 
 def test_dl_sequence_consumes_only_manifest_full_timeline_entries(tmp_path: Path) -> None:
