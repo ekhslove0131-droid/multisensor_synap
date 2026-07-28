@@ -697,10 +697,11 @@ def _write_ml_view_fixture(root: Path) -> None:
             row: dict[str, Any] = {
                 "person_key": f"person-{index:02d}",
                 "canonical_time": index,
-                "feature_one": float(index % 5),
-                "feature_two": float(index // 3),
+                "autonomic_arousal__robust_z": float(index % 5),
+                "motor_activation__mean_5s": float(index // 3),
                 "pattern_binary": int(is_pattern),
                 "event_binary": int(index % 5 != 0),
+                "hard_negative": int(not is_pattern),
                 "stage_code": (
                     stage_codes[index % len(stage_codes)] if is_pattern else "NO_EVENT"
                 ),
@@ -782,7 +783,10 @@ def test_ml_benchmark_contract() -> None:
     assert 'ONSET_EVENT_TARGET = "event_binary"' in source
 
 
-@pytest.mark.parametrize("missing_target", ["pattern_binary", "event_binary", "stage_code"])
+@pytest.mark.parametrize(
+    "missing_target",
+    ["pattern_binary", "event_binary", "hard_negative", "stage_code"],
+)
 def test_ml_view_manifest_requires_all_multitask_labels(
     tmp_path: Path, missing_target: str
 ) -> None:
@@ -838,11 +842,15 @@ def test_numeric_feature_contract_handles_task2_shaped_frame_for_both_candidates
             "split_role": ["train"] * rows,
             "context": ["focused_task"] * rows,
             "event_id": [f"event-{value // 6}" for value in range(rows)],
-            "causal_z": [float(value % 5) for value in range(rows)],
-            "causal_slope": [float(value // 5) for value in range(rows)],
-            "validity_flag": [value % 2 == 0 for value in range(rows)],
+            "context__sleep": [value % 7 == 0 for value in range(rows)],
+            "time_cos": [float(value % 24) for value in range(rows)],
+            "motor_activation__mean_5s": [float(value // 5) for value in range(rows)],
+            "autonomic_arousal__robust_z": [float(value % 5) for value in range(rows)],
+            "is_awake": [value % 8 != 0 for value in range(rows)],
             "pattern_binary": [int(value % 6 != 0) for value in range(rows)],
             "event_binary": [int(value % 5 != 0) for value in range(rows)],
+            "hard_negative": [int(value % 6 == 0) for value in range(rows)],
+            "forecast_60s": [int(value % 9 == 0) for value in range(rows)],
             "stage_code": [
                 namespace["STAGE_CODES"][value % len(namespace["STAGE_CODES"])]
                 if value % 6 != 0
@@ -860,8 +868,14 @@ def test_numeric_feature_contract_handles_task2_shaped_frame_for_both_candidates
         namespace["fit_hgb_candidate"](frame, features),
     ]
 
-    assert features == ["causal_z", "causal_slope", "validity_flag"]
-    assert all(candidate["pattern_model"].n_features_in_ == 3 for candidate in candidates)
+    assert features == [
+        "autonomic_arousal__robust_z",
+        "motor_activation__mean_5s",
+        "time_cos",
+        "is_awake",
+        "context__sleep",
+    ]
+    assert all(candidate["pattern_model"].n_features_in_ == 5 for candidate in candidates)
 
 
 @pytest.mark.parametrize(
@@ -879,16 +893,30 @@ def test_numeric_feature_contract_rejects_unclassified_nonnumeric_columns(
     namespace = ml_benchmark_namespace()
     frame = pd.DataFrame({"unexpected_feature": invalid_feature})
 
-    with pytest.raises(ValueError, match="non-numeric feature columns"):
+    with pytest.raises(ValueError, match="unapproved columns"):
+        namespace["_infer_feature_columns"](frame)
+
+
+@pytest.mark.parametrize("column", ["participant_index", "row_index", "future_label"])
+def test_causal_feature_allowlist_rejects_numeric_adversarial_columns(column: str) -> None:
+    namespace = ml_benchmark_namespace()
+    frame = pd.DataFrame(
+        {
+            "autonomic_arousal__robust_z": [0.1, 0.2],
+            column: [1, 2],
+        }
+    )
+
+    with pytest.raises(ValueError, match="unapproved columns"):
         namespace["_infer_feature_columns"](frame)
 
 
 def test_feature_matrix_rejects_nonfinite_numeric_values() -> None:
     namespace = ml_benchmark_namespace()
-    frame = pd.DataFrame({"causal_z": [0.0, float("inf")]})
+    frame = pd.DataFrame({"autonomic_arousal__robust_z": [0.0, float("inf")]})
 
     with pytest.raises(ValueError, match="non-finite"):
-        namespace["_feature_matrix"](frame, ["causal_z"])
+        namespace["_feature_matrix"](frame, ["autonomic_arousal__robust_z"])
 
 
 def test_numeric_feature_contract_rejects_empty_feature_set() -> None:
@@ -899,6 +927,7 @@ def test_numeric_feature_contract_rejects_empty_feature_set() -> None:
             "canonical_time": [0],
             "pattern_binary": [0],
             "event_binary": [0],
+            "hard_negative": [0],
             "stage_code": ["NO_EVENT"],
         }
     )
@@ -913,10 +942,11 @@ def test_ml_candidates_fit_event_stage_and_behavior_heads() -> None:
     namespace = ml_benchmark_namespace()
     frame = pd.DataFrame(
         {
-            "feature_one": [float(value % 5) for value in range(60)],
-            "feature_two": [float(value // 5) for value in range(60)],
+            "autonomic_arousal__robust_z": [float(value % 5) for value in range(60)],
+            "motor_activation__mean_5s": [float(value // 5) for value in range(60)],
             "pattern_binary": [int(value % 6 != 0) for value in range(60)],
             "event_binary": [0] * 60,
+            "hard_negative": [int(value % 6 == 0) for value in range(60)],
             "stage_code": [
                 namespace["STAGE_CODES"][value % len(namespace["STAGE_CODES"])]
                 if value % 6 != 0
@@ -929,7 +959,11 @@ def test_ml_candidates_fit_event_stage_and_behavior_heads() -> None:
         frame[behavior] = [int((value + offset) % 3 == 0) for value in range(60)]
 
     for factory in (namespace["fit_logistic_candidate"], namespace["fit_hgb_candidate"]):
-        candidate = factory(frame, ["feature_one", "feature_two"])
+        feature_columns = [
+            "autonomic_arousal__robust_z",
+            "motor_activation__mean_5s",
+        ]
+        candidate = factory(frame, feature_columns)
         assert set(candidate) == {
             "behavior_models",
             "model_name",
@@ -939,7 +973,7 @@ def test_ml_candidates_fit_event_stage_and_behavior_heads() -> None:
         assert set(candidate["stage_models"]) == set(namespace["STAGE_CODES"])
         assert set(candidate["behavior_models"]) == set(namespace["BEHAVIOR_CODES"])
         probability = candidate["pattern_model"].predict_proba(
-            namespace["_feature_matrix"](frame, ["feature_one", "feature_two"])
+            namespace["_feature_matrix"](frame, feature_columns)
         )[:, 1]
         assert probability.shape == (len(frame),)
         assert ((probability >= 0) & (probability <= 1)).all()
@@ -949,23 +983,46 @@ def test_ml_training_masks_keep_pattern_onset_and_behavior_semantics_distinct() 
     namespace = ml_benchmark_namespace()
     frame = pd.DataFrame(
         {
-            "row_kind": ["low_pre_onset", "onset_audit", "hard_negative", "baseline"],
-            "pattern_binary": [1, 0, 0, 0],
-            "event_binary": [0, 1, 0, 0],
-            "stage_code": ["LOW", "NO_EVENT", "NO_EVENT", "NO_EVENT"],
+            "row_kind": [
+                "low_pre_onset",
+                "onset_audit",
+                "hard_negative_positive",
+                "hard_negative_negative",
+                "baseline",
+            ],
+            "pattern_binary": [1, 0, 0, 0, 0],
+            "event_binary": [0, 1, 0, 0, 0],
+            "hard_negative": [0, 0, 1, 1, 0],
+            "stage_code": ["LOW", "NO_EVENT", "NO_EVENT", "NO_EVENT", "NO_EVENT"],
         }
     )
     for behavior in namespace["BEHAVIOR_CODES"]:
         frame[behavior] = 0
-    frame.loc[frame["row_kind"].eq("hard_negative"), "ear_covering"] = 1
+    frame.loc[frame["row_kind"].eq("hard_negative_positive"), "ear_covering"] = 1
 
     stage_rows = frame.loc[namespace["_select_stage_training_rows"](frame), "row_kind"]
     behavior_rows = frame.loc[namespace["_select_behavior_training_rows"](frame), "row_kind"]
 
     assert stage_rows.tolist() == ["low_pre_onset"]
-    assert behavior_rows.tolist() == ["low_pre_onset", "hard_negative"]
+    assert behavior_rows.tolist() == ["low_pre_onset", "hard_negative_positive"]
     assert frame.loc[frame["row_kind"].eq("onset_audit"), "event_binary"].item() == 1
     assert frame.loc[frame["row_kind"].eq("onset_audit"), "stage_code"].item() == "NO_EVENT"
+
+
+def test_behavior_decision_mask_rejects_positive_ordinary_baseline() -> None:
+    namespace = ml_benchmark_namespace()
+    frame = pd.DataFrame(
+        {
+            "pattern_binary": [0],
+            "hard_negative": [0],
+        }
+    )
+    for behavior in namespace["BEHAVIOR_CODES"]:
+        frame[behavior] = 0
+    frame.loc[0, "ear_covering"] = 1
+
+    with pytest.raises(ValueError, match="behavior-positive rows must be pattern or hard negative"):
+        namespace["_select_behavior_training_rows"](frame)
 
 
 def test_prediction_rows_apply_target_specific_decision_masks() -> None:
@@ -981,9 +1038,10 @@ def test_prediction_rows_apply_target_specific_decision_masks() -> None:
         {
             "person_key": ["P1"] * 4,
             "canonical_time": [0, 1, 2, 3],
-            "causal_z": [0.1, 0.2, 0.3, 0.4],
+            "autonomic_arousal__robust_z": [0.1, 0.2, 0.3, 0.4],
             "pattern_binary": [1, 0, 0, 0],
             "event_binary": [0, 1, 0, 0],
+            "hard_negative": [0, 0, 1, 1],
             "stage_code": ["LOW", "NO_EVENT", "NO_EVENT", "NO_EVENT"],
         }
     )
@@ -1001,7 +1059,7 @@ def test_prediction_rows_apply_target_specific_decision_masks() -> None:
     predictions = namespace["_prediction_rows"](
         candidate,
         frame,
-        ["causal_z"],
+        ["autonomic_arousal__robust_z"],
         split_role="validation",
         pattern_threshold=0.5,
     )
