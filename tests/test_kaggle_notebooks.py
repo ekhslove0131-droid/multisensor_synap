@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ import pyarrow.parquet as pq
 import pytest
 
 KAGGLE_DIR = Path(__file__).parents[1] / "kaggle"
+PROJECT_ROOT = KAGGLE_DIR.parent
 NOTEBOOKS = [
     "01_ml_data.ipynb",
     "02_ml_benchmark.ipynb",
@@ -220,6 +222,13 @@ def test_notebooks_have_required_structure() -> None:
 
 def test_kaggle_directory_contains_exactly_the_four_contract_notebooks() -> None:
     assert sorted(path.name for path in KAGGLE_DIR.glob("*.ipynb")) == NOTEBOOKS
+
+
+def test_ruff_excludes_unexecuted_notebooks_and_sdd_workspace() -> None:
+    config = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
+    excluded = set(config["tool"]["ruff"]["extend-exclude"])
+
+    assert {"kaggle/*.ipynb", ".superpowers"} <= excluded
 
 
 def test_notebooks_have_korean_title_english_purpose_and_oracle_warning() -> None:
