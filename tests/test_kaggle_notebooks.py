@@ -4325,6 +4325,9 @@ def test_round5_ml_dl_event_alert_runs_have_identical_overlap_semantics() -> Non
     ml_event = ast.get_source_segment(
         ml_source, _named_definition(ml_tree, "_common_grid_event_statistics")
     ) or ""
+    ml_segment_state = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "SegmentEventGridState")
+    ) or ""
     ml_select = ast.get_source_segment(
         ml_source, _named_definition(ml_tree, "select_validation_threshold")
     ) or ""
@@ -4343,7 +4346,11 @@ def test_round5_ml_dl_event_alert_runs_have_identical_overlap_semantics() -> Non
         "Mapping": dict,
         "COMMON_THRESHOLD_GRID_SIZE": 101,
     }
-    exec(ml_segments + "\n" + ml_event + "\n" + ml_select, namespace)
+    exec(
+        ml_segments + "\n" + ml_segment_state + "\n" + ml_event + "\n"
+        + ml_select,
+        namespace,
+    )
     exec(dl_event + "\n" + dl_select, namespace)
     truth = np.array([0, 1, 1, 0], dtype=np.int8)
     probability = np.array([0.8, 0.8, 0.8, 0.8])
@@ -4414,11 +4421,15 @@ def test_round5_streaming_stage_and_forecast_outputs_are_complete() -> None:
     postprocess = ast.get_source_segment(
         source, _named_definition(tree, "run_rank0_postprocess")
     ) or ""
+    forecast = ast.get_source_segment(
+        source, _named_definition(tree, "BoundedForecastLeadState")
+    ) or ""
 
     assert "stage_confusion" in state
-    assert "forecast_truth_active" in state
-    assert "forecast_alert_active" in state
-    assert "forecast_lead_seconds" in state
+    assert "segment_event" in state
+    assert "forecast_state" in state
+    assert "BoundedForecastLeadState" in state
+    assert "forecast_lead_seconds" not in state
     for token in (
         "stage_confusion_count",
         "stage_global_recall",
@@ -4432,6 +4443,184 @@ def test_round5_streaming_stage_and_forecast_outputs_are_complete() -> None:
         assert token in metrics
     assert "for actual in STAGE_CODES" in metrics
     assert "for predicted in STAGE_CODES" in metrics
-    assert "no predicted alert before onset" in state
+    assert "no_prediction" in forecast
+    assert "onset row itself is not eligible" in forecast
     assert "assert_unique_metric_rows" in metrics
     assert "stage_confusion.to_parquet" in postprocess
+
+
+def test_round6_ml_dl_segment_boundaries_close_event_and_alert_state() -> None:
+    """Session/run/gap boundaries close active truth and alert runs identically."""
+    ml_source = code_cell_source(
+        load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
+    )
+    ml_tree = ast.parse(ml_source)
+    dl_source, dl_tree = _dl_tcn_ast()
+    ml_segment = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "SegmentEventGridState")
+    ) or ""
+    dl_segment = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "SegmentEventGridState")
+    ) or ""
+    rows = [
+        {
+            "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "session_id": "s1", "canonical_time": pd.Timestamp("2026-01-01T00:00:00Z"),
+            "truth": 0, "probability": 0.8,
+        },
+        {
+            "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "session_id": "s2", "canonical_time": pd.Timestamp("2026-01-01T00:00:01Z"),
+            "truth": 1, "probability": 0.8,
+        },
+        {
+            "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "session_id": "s2", "canonical_time": pd.Timestamp("2026-01-01T00:00:02Z"),
+            "truth": 0, "probability": 0.0,
+        },
+        {
+            "person_key": "p1", "run_id": "r2", "dataset_id": "d1",
+            "session_id": "s2", "canonical_time": pd.Timestamp("2026-01-01T00:00:05Z"),
+            "truth": 1, "probability": 0.8,
+        },
+        {
+            "person_key": "p1", "run_id": "r2", "dataset_id": "d1",
+            "session_id": "s2", "canonical_time": pd.Timestamp("2026-01-01T00:00:06Z"),
+            "truth": 0, "probability": 0.0,
+        },
+    ]
+    results = []
+    for class_source in (ml_segment, dl_segment):
+        namespace = {
+            "np": np,
+            "pd": pd,
+            "Any": Any,
+            "Mapping": dict,
+            "COMMON_THRESHOLD_GRID_SIZE": 101,
+        }
+        exec(class_source, namespace)
+        state = namespace["SegmentEventGridState"](bins=101)
+        for row in rows:
+            state.update_row(
+                row, truth=row["truth"], probability=row["probability"]
+            )
+        results.append(state.finalize())
+    threshold_index = 80
+    for result in results:
+        assert result["truth_events"] == 2
+        assert result["detected"][threshold_index] == 2
+        assert result["false_alerts"][threshold_index] == 1
+        assert result["duration_hours"] == pytest.approx(5 / 3600)
+    np.testing.assert_array_equal(results[0]["detected"], results[1]["detected"])
+    np.testing.assert_array_equal(
+        results[0]["false_alerts"], results[1]["false_alerts"]
+    )
+
+
+def test_round6_forecast_uses_prior_60s_ring_and_fixed_histograms() -> None:
+    """Lead uses only prior continuous endpoints and bounded 1..60 histograms."""
+    source, tree = _dl_tcn_ast()
+    forecast_source = ast.get_source_segment(
+        source, _named_definition(tree, "BoundedForecastLeadState")
+    ) or ""
+    namespace = {
+        "np": np,
+        "pd": pd,
+        "Any": Any,
+        "Mapping": dict,
+        "deque": __import__("collections").deque,
+    }
+    exec(forecast_source, namespace)
+    state = namespace["BoundedForecastLeadState"](bins=101)
+
+    def feed_segment(
+        session: str,
+        start_second: int,
+        length: int,
+        onset_offset: int,
+        alert_offsets: set[int],
+    ) -> None:
+        for offset in range(length):
+            row = {
+                "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+                "session_id": session,
+                "canonical_time": pd.Timestamp("2026-01-01T00:00:00Z")
+                + pd.Timedelta(seconds=start_second + offset),
+            }
+            state.update_row(
+                row,
+                truth=int(offset >= onset_offset),
+                probability=0.9 if offset in alert_offsets else 0.0,
+            )
+
+    feed_segment("lead-60", 0, 61, 60, {0})
+    feed_segment("lead-30", 100, 31, 30, {0})
+    feed_segment("lead-1", 200, 2, 1, {0})
+    feed_segment("no-pred", 300, 2, 1, set())
+    feed_segment("left-censored", 400, 1, 0, set())
+    state.update_row(
+        {
+            "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "session_id": "gap-reset",
+            "canonical_time": pd.Timestamp("2026-01-01T00:10:00Z"),
+        },
+        truth=0,
+        probability=0.9,
+    )
+    state.update_row(
+        {
+            "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "session_id": "gap-reset",
+            "canonical_time": pd.Timestamp("2026-01-01T00:10:05Z"),
+        },
+        truth=1,
+        probability=0.0,
+    )
+    summary = state.summary(threshold=0.5)
+    assert summary["forecast_lead_support"] == 3
+    assert summary["forecast_lead_mean_seconds"] == pytest.approx(91 / 3)
+    assert summary["forecast_lead_median_seconds"] == 30
+    assert summary["forecast_no_prediction_support"] == 1
+    assert summary["forecast_left_censored_support"] == 2
+    assert state.lead_histogram.shape == (101, 61)
+    assert not hasattr(state, "forecast_lead_seconds")
+
+
+def test_round6_streaming_contract_uses_segment_state_and_bounded_forecast() -> None:
+    """Both notebook paths use observed-row exposure and bounded forecast stats."""
+    ml_source = code_cell_source(
+        load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
+    )
+    ml_tree = ast.parse(ml_source)
+    ml_event = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "_common_grid_event_statistics")
+    ) or ""
+    dl_source, dl_tree = _dl_tcn_ast()
+    state = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "StreamingEvaluationState")
+    ) or ""
+    metrics = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "finalize_streaming_metrics")
+    ) or ""
+    forecast = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "BoundedForecastLeadState")
+    ) or ""
+
+    assert "SegmentEventGridState" in ml_event
+    assert "duration_hours" not in ml_event or "observed_rows / 3600" in ml_event
+    assert "SegmentEventGridState" in state
+    assert "BoundedForecastLeadState" in state
+    assert "forecast_truth_active" not in state
+    assert "forecast_lead_seconds" not in state
+    assert "deque(maxlen=60)" in forecast
+    assert "lead_histogram" in forecast
+    assert "np.cumsum" in forecast
+    assert "onset row itself is not eligible" in forecast
+    for token in (
+        "forecast_lead_mean_seconds",
+        "forecast_lead_median_seconds",
+        "forecast_lead_support",
+        "forecast_no_prediction_support",
+        "forecast_left_censored_support",
+    ):
+        assert token in metrics
