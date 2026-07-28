@@ -3269,18 +3269,27 @@ def test_dl_tcn_verifies_sequence_hashes_schema_and_split_membership() -> None:
     source, tree = _dl_tcn_ast()
     verify = _named_definition(tree, "verify_sequence_inputs")
     verify_source = ast.get_source_segment(source, verify) or ""
+    declared_verify_source = "\n".join(
+        ast.get_source_segment(source, node) or ""
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "verify_sequence_inputs"
+    )
+    physical_identity_source = ast.get_source_segment(
+        source, _named_definition(tree, "recompute_physical_dataset_identity")
+    ) or ""
+    verify_contract_source = verify_source + declared_verify_source
 
-    assert "sha256_file" in _called_names(verify)
-    assert "source_dataset_hash" in verify_source
-    assert "split_hash" in verify_source
-    assert "normalization" in verify_source
-    assert "ALLOWED_FEATURE_COLUMNS" in verify_source
-    assert "EXPECTED_SPLIT_COUNTS" in verify_source
-    assert "person leakage" in verify_source
-    assert "sampled" in verify_source
-    assert "full_causal_timeline" in verify_source
-    assert "row_count" in verify_source
-    assert "schema" in verify_source
+    assert "sha256_file" in declared_verify_source + physical_identity_source
+    assert "source_dataset_hash" in verify_contract_source
+    assert "split_hash" in verify_contract_source
+    assert "normalization" in verify_contract_source
+    assert "ALLOWED_FEATURE_COLUMNS" in verify_contract_source
+    assert "EXPECTED_SPLIT_COUNTS" in verify_contract_source
+    assert "person leakage" in verify_contract_source
+    assert "sampled" in verify_contract_source
+    assert "full_causal_timeline" in verify_contract_source
+    assert "row_count" in verify_contract_source
+    assert "schema" in verify_contract_source
     index_verifier = ast.get_source_segment(
         source, _named_definition(tree, "_verify_sequence_index")
     ) or ""
@@ -3290,7 +3299,7 @@ def test_dl_tcn_verifies_sequence_hashes_schema_and_split_membership() -> None:
     assert "behavior-positive ordinary baseline" in index_verifier
     assert "deterministic window_id mismatch" in index_verifier
     assert "timezone-aware UTC" in index_verifier
-    assert "expected_feature_types" in verify_source
+    assert "expected_feature_types" in verify_contract_source
 
 
 def test_dl_tcn_architecture_is_causal_masked_and_within_parameter_budget() -> None:
@@ -3385,7 +3394,7 @@ def test_dl_tcn_uses_torchrun_ddp_amp_and_deterministic_sampler() -> None:
     assert all(name in setup_source for name in ("LOCAL_RANK", "RANK", "WORLD_SIZE", "nccl"))
     assert "DistributedDataParallel" in runner_source
     assert "DistributedSampler" in runner_source
-    assert "set_epoch" in runner_source
+    assert "set_epoch" in train_source
     assert "autocast" in train_source
     assert "GradScaler" in runner_source
     assert "clip_grad_norm_" in train_source
@@ -3436,9 +3445,12 @@ def test_dl_tcn_common_outputs_and_selection_are_validation_only() -> None:
     comparison = ast.get_source_segment(
         source, _named_definition(tree, "write_validation_model_comparison")
     ) or ""
-    aggregate_metrics = ast.get_source_segment(
-        source, _named_definition(tree, "compute_metrics_from_predictions")
-    ) or ""
+    aggregate_metrics = "\n".join(
+        ast.get_source_segment(source, node) or ""
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "compute_metrics_from_predictions"
+    )
     runner = ast.get_source_segment(
         source, _named_definition(tree, "run_dl_training")
     ) or ""
@@ -3464,13 +3476,222 @@ def test_dl_tcn_common_outputs_and_selection_are_validation_only() -> None:
     ))
     assert "validation" in comparison
     assert "locked_test" in comparison
-    assert "on=['target', 'metric']" in comparison
+    assert "keys = ['target', 'metric']" in comparison
+    assert "validate='one_to_one'" in comparison
     assert all(metric in aggregate_metrics for metric in (
         "stage_macro_f1",
         "stage_balanced_accuracy",
         "behavior_micro_aucpr",
         "behavior_macro_aucpr",
     ))
-    assert "select_validation_threshold" in runner
-    assert "drop_duplicates" in runner
-    assert "compute_metrics_from_predictions" in runner
+    aggregate_shards = ast.get_source_segment(
+        source, _named_definition(tree, "aggregate_prediction_shards")
+    ) or ""
+    validate_person_shard = ast.get_source_segment(
+        source, _named_definition(tree, "_validate_person_prediction_rows")
+    ) or ""
+    assert "select_validation_threshold" in aggregate_shards
+    assert (
+        "drop_duplicates" in runner
+        or "prediction window coverage is duplicate" in validate_person_shard
+    )
+    assert (
+        "compute_metrics_from_predictions" in runner
+        or "aggregate_prediction_shards" in runner
+    )
+
+
+def test_dl_tcn_streams_person_sharded_predictions_without_dataframe_collectives() -> None:
+    """Evaluation must stream person shards and use bounded threshold scans."""
+    source, tree = _dl_tcn_ast()
+    for definition in (
+        "PersonShardEvalSampler",
+        "evaluate_to_prediction_shard",
+        "write_prediction_shard_manifest",
+        "aggregate_prediction_shards",
+        "StreamingMetricAccumulator",
+    ):
+        assert _named_definition(tree, definition)
+    threshold_source = ast.get_source_segment(
+        source, _named_definition(tree, "select_validation_threshold")
+    ) or ""
+    shard_source = ast.get_source_segment(
+        source, _named_definition(tree, "evaluate_to_prediction_shard")
+    ) or ""
+    sampler_source = ast.get_source_segment(
+        source, _named_definition(tree, "PersonShardEvalSampler")
+    ) or ""
+    aggregate_source = ast.get_source_segment(
+        source, _named_definition(tree, "aggregate_prediction_shards")
+    ) or ""
+    runner_source = ast.get_source_segment(
+        source, _named_definition(tree, "run_dl_training")
+    ) or ""
+
+    assert "THRESHOLD_GRID_SIZE" in threshold_source
+    assert "np.unique" not in threshold_source
+    assert "ParquetWriter" in shard_source
+    assert "self.ranges" in sampler_source
+    assert "self.indices.extend" not in sampler_source
+    assert "seen_people" in aggregate_source
+    assert "seen_windows" not in aggregate_source
+    assert "all_gather_object" not in source
+    assert "_gather_frames" not in source
+    assert "PersonShardEvalSampler" in runner_source
+    assert "aggregate_prediction_shards" in runner_source
+
+
+def test_dl_tcn_ddp_cleanup_and_telemetry_fail_without_collective_hangs() -> None:
+    """Cleanup cannot enter a barrier and optional telemetry cannot abort DDP."""
+    source, tree = _dl_tcn_ast()
+    setup = ast.get_source_segment(source, _named_definition(tree, "setup_ddp")) or ""
+    cleanup = ast.get_source_segment(source, _named_definition(tree, "cleanup_ddp")) or ""
+    telemetry = ast.get_source_segment(
+        source, _named_definition(tree, "safe_wandb_call")
+    ) or ""
+
+    assert "timeout=" in setup
+    assert "TORCH_NCCL_ASYNC_ERROR_HANDLING" in setup
+    assert "destroy_process_group" in cleanup
+    assert "barrier" not in cleanup
+    assert "except Exception" in telemetry
+    assert "return None" in telemetry
+
+
+def test_dl_tcn_recomputes_physical_identity_and_endpoint_labels() -> None:
+    """Rehashed declarations cannot hide changed source data or a shifted endpoint label."""
+    source, tree = _dl_tcn_ast()
+    for definition in (
+        "discover_attached_goal15_inputs",
+        "recompute_physical_dataset_identity",
+        "verify_train_normalization_statistics",
+    ):
+        assert _named_definition(tree, definition)
+    verify_source = ast.get_source_segment(
+        source, _named_definition(tree, "verify_sequence_inputs")
+    ) or ""
+    dataset_source = ast.get_source_segment(
+        source, _named_definition(tree, "Goal15SequenceDataset")
+    ) or ""
+
+    assert "recompute_physical_dataset_identity" in verify_source
+    assert "source_content_inventory" in verify_source
+    assert "EXPECTED_SPLIT_COUNTS" in verify_source
+    assert "endpoint label mismatch" in dataset_source
+    assert "endpoint context mismatch" in dataset_source
+    assert "prediction_time" in dataset_source
+    assert "forecast_60s" in dataset_source
+    assert "phase" in dataset_source
+
+
+def test_dl_tcn_normalization_is_per_time_and_has_padding_invariance_check() -> None:
+    """Any normalization that aggregates across time can leak right padding into prefix logits."""
+    source, tree = _dl_tcn_ast()
+    assert "GroupNorm" not in source
+    assert _named_definition(tree, "ChannelLayerNorm1d")
+    invariant = ast.get_source_segment(
+        source, _named_definition(tree, "assert_right_padding_invariance")
+    ) or ""
+
+    assert "torch.allclose" in invariant
+    assert "event_logits" in invariant
+    assert "stage_logits" in invariant
+    assert "behavior_logits" in invariant
+    assert "right padding" in invariant
+
+
+def test_dl_tcn_has_guarded_self_contained_torchrun_launcher() -> None:
+    """Kaggle import stays idle; workers rediscover physical hashes."""
+    source, tree = _dl_tcn_ast()
+    for definition in (
+        "build_torchrun_worker_source",
+        "write_guarded_torchrun_worker",
+        "launch_dual_t4_torchrun",
+    ):
+        assert _named_definition(tree, definition)
+    launcher = ast.get_source_segment(
+        source, _named_definition(tree, "launch_dual_t4_torchrun")
+    ) or ""
+    worker = ast.get_source_segment(
+        source, _named_definition(tree, "build_torchrun_worker_source")
+    ) or ""
+
+    assert "require_exactly_two_cuda_devices" in launcher
+    assert "verify_sequence_inputs" in launcher
+    assert "python" in launcher
+    assert "torch.distributed.run" in launcher
+    assert "--standalone" in launcher
+    assert "--nproc_per_node=2" in launcher
+    assert "/kaggle/working" in launcher
+    assert "GOAL15_EXPECTED_SOURCE_HASH" in worker
+    assert "GOAL15_EXPECTED_SPLIT_HASH" in worker
+    assert "'RUN_LOCKED_TEST'" in worker
+    assert "'_verify_declared_sequence_inputs'" in worker
+    assert "if RUN_TRAINING" in source
+
+
+def test_dl_tcn_complete_metrics_stress_and_comparison_contract() -> None:
+    """Validation reports uncertainty, label detail, stress, and safe comparison."""
+    source, tree = _dl_tcn_ast()
+    for definition in (
+        "bootstrap_people_ci",
+        "compute_forecast_lead_times",
+        "compute_stage_confusion_rows",
+        "deterministic_stress_batch",
+        "evaluate_noise_stress_to_shards",
+        "compute_noise_degradation",
+        "verify_metric_identity",
+    ):
+        assert _named_definition(tree, definition)
+    metric_source = ast.get_source_segment(
+        source, _named_definition(tree, "compute_metrics_from_predictions")
+    ) or ""
+    comparison = ast.get_source_segment(
+        source, _named_definition(tree, "write_validation_model_comparison")
+    ) or ""
+
+    assert "bootstrap_people_ci" in metric_source
+    assert "forecast_lead" in metric_source
+    assert "per_stage_recall" in metric_source
+    assert "confusion_matrix" in metric_source
+    assert "behavior_micro_auroc" in metric_source
+    assert "behavior_micro_f1" in metric_source
+    assert "positive_support" in metric_source
+    assert "verify_metric_identity" in comparison
+    assert "one_to_one" in comparison
+    assert "RUN_VALIDATION_COMPARISON" in source
+
+
+def test_dl_tcn_train_only_weights_and_global_ddp_conditional_means() -> None:
+    """Conditional losses and training telemetry must be global means with train-only support."""
+    source, tree = _dl_tcn_ast()
+    for definition in (
+        "derive_train_loss_weights",
+        "write_train_loss_support",
+        "global_valid_count",
+        "reduce_training_statistics",
+    ):
+        assert _named_definition(tree, definition)
+    loss_source = ast.get_source_segment(
+        source, _named_definition(tree, "masked_multitask_loss")
+    ) or ""
+    train_source = ast.get_source_segment(
+        source, _named_definition(tree, "train_one_epoch")
+    ) or ""
+    runner_source = ast.get_source_segment(
+        source, _named_definition(tree, "run_dl_training")
+    ) or ""
+
+    assert "all_reduce" in ast.get_source_segment(
+        source, _named_definition(tree, "global_valid_count")
+    )
+    assert "world_size" in loss_source
+    assert "global_stage_count" in loss_source
+    assert "global_behavior_count" in loss_source
+    assert "pos_weight" in loss_source
+    assert "reduce_training_statistics" in train_source
+    assert "event_local_sum" in loss_source
+    assert "stage_local_count" in loss_source
+    assert "valid_counts" in train_source
+    assert runner_source.count("set_epoch") == 0
+    assert "SEQUENCE_LENGTH_CANDIDATE = 600" in source
