@@ -3993,6 +3993,193 @@ def test_dl_tcn_has_guarded_self_contained_torchrun_launcher() -> None:
     assert "if RUN_TRAINING" in source
 
 
+def _torchrun_worker_constant_names(tree: ast.Module) -> tuple[str, ...]:
+    builder = _named_definition(tree, "build_torchrun_worker_source")
+    for node in builder.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(
+            isinstance(target, ast.Name) and target.id == "constant_names"
+            for target in node.targets
+        ):
+            value = ast.literal_eval(node.value)
+            assert isinstance(value, tuple)
+            assert all(isinstance(item, str) for item in value)
+            return value
+    raise AssertionError("torchrun worker constant_names assignment is missing")
+
+
+def _safe_notebook_constant_value(node: ast.AST) -> Any:
+    try:
+        return ast.literal_eval(node)
+    except (TypeError, ValueError):
+        pass
+    if (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Mult)
+    ):
+        return _safe_notebook_constant_value(
+            node.left
+        ) * _safe_notebook_constant_value(node.right)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Path"
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        return Path(_safe_notebook_constant_value(node.args[0]))
+    raise AssertionError("worker test accepts literal/Path constants only")
+
+
+def _notebook_literal_globals(
+    tree: ast.Module, names: set[str]
+) -> dict[str, Any]:
+    assignments: dict[str, ast.AST] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in names:
+                    assignments[target.id] = node.value
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id in names
+            and node.value is not None
+        ):
+            assignments[node.target.id] = node.value
+    return {
+        name: _safe_notebook_constant_value(assignments[name])
+        for name in names
+        if name in assignments
+    }
+
+
+def _worker_literal(value: Any) -> str:
+    if isinstance(value, Path):
+        return f"Path({str(value)!r})"
+    return repr(value)
+
+
+def test_torchrun_generated_comparison_worker_carries_streaming_constants(
+    tmp_path: Path,
+) -> None:
+    source, tree = _dl_tcn_ast()
+    constant_names = _torchrun_worker_constant_names(tree)
+    streaming_constant_names = (
+        "ML_CHAMPION_PREDICTION_BATCH_ROWS",
+        "ML_CHAMPION_METRICS_BATCH_ROWS",
+        "ML_CHAMPION_METRICS_MAX_BYTES",
+        "ML_CHAMPION_PREDICTION_COLUMNS",
+        "ML_CHAMPION_METRIC_COLUMNS",
+    )
+    relevant_constant_names = {
+        "SERIES_ID",
+        "DATA_STATUS",
+        "PATTERN_TARGET",
+        "ONSET_EVENT_TARGET",
+        "STAGE_CODES",
+        "BEHAVIOR_CODES",
+        "ATTACHED_INPUT_ROOT",
+        "ALLOWED_FEATURE_COLUMNS",
+        "RUN_VALIDATION_COMPARISON",
+        *streaming_constant_names,
+    }
+    notebook_values = _notebook_literal_globals(
+        tree, relevant_constant_names.difference({"ALLOWED_FEATURE_COLUMNS"})
+    )
+    notebook_values["ALLOWED_FEATURE_COLUMNS"] = dl_sequence_namespace()[
+        "ALLOWED_FEATURE_COLUMNS"
+    ]
+    notebook_values["RUN_VALIDATION_COMPARISON"] = True
+    assignment_source = "\n".join(
+        f"{name} = {_worker_literal(notebook_values[name])}"
+        for name in constant_names
+        if name in relevant_constant_names
+    )
+    helper_names = (
+        "sha256_file",
+        "_require_sha256",
+        "_manifest_candidates",
+        "_metric_identity_hashes",
+        "_required_ml_champion_targets",
+        "_require_nonempty_string",
+        "_validate_ml_champion_endpoint_targets",
+        "_validate_ml_champion_prediction_stream",
+        "_validate_ml_champion_metrics",
+        "discover_ml_champion_artifact",
+    )
+    helper_source = "\n\n".join(
+        ast.get_source_segment(source, _named_definition(tree, name)) or ""
+        for name in helper_names
+    )
+    generated_worker_source = assignment_source + "\n\n" + helper_source
+    compile(generated_worker_source, "goal15-generated-worker.py", "exec")
+
+    label_hash, feature_hash = _handoff_schema_hashes(
+        tuple(notebook_values["ALLOWED_FEATURE_COLUMNS"])
+    )
+    source_hash = "a" * 64
+    split_hash = "b" * 64
+    prediction_path, _, _ = _write_ml_champion_handoff_fixture(
+        tmp_path,
+        source_hash=source_hash,
+        split_hash=split_hash,
+        label_hash=label_hash,
+        feature_hash=feature_hash,
+    )
+
+    @dataclass(frozen=True)
+    class WorkerAttachedMLChampion:
+        prediction_path: Path
+        metrics_path: Path
+        manifest_path: Path
+        manifest: dict[str, Any]
+
+    worker_namespace: dict[str, Any] = {
+        "Any": Any,
+        "Mapping": Mapping,
+        "Path": Path,
+        "AttachedMLChampion": WorkerAttachedMLChampion,
+        "hashlib": hashlib,
+        "json": json,
+        "np": np,
+        "pa": pa,
+        "pd": pd,
+        "pq": pq,
+    }
+    assert not set(streaming_constant_names).intersection(worker_namespace)
+    exec(generated_worker_source, worker_namespace)
+
+    champion = None
+    if worker_namespace["RUN_VALIDATION_COMPARISON"]:
+        champion = worker_namespace["discover_ml_champion_artifact"](
+            source_dataset_hash=source_hash,
+            split_hash=split_hash,
+            root=tmp_path,
+        )
+
+    assert champion is not None
+    assert champion.prediction_path == prediction_path
+    helper_offset = generated_worker_source.index(
+        "def _validate_ml_champion_prediction_stream"
+    )
+    generated_tree = ast.parse(generated_worker_source)
+    assignment_counts: dict[str, int] = {
+        name: 0 for name in streaming_constant_names
+    }
+    for node in generated_tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in assignment_counts:
+                assignment_counts[target.id] += 1
+    for name in streaming_constant_names:
+        assert generated_worker_source.index(f"{name} = ") < helper_offset
+        assert assignment_counts[name] == 1
+        assert worker_namespace[name] == notebook_values[name]
+
+
 def test_dl_tcn_complete_metrics_stress_and_comparison_contract() -> None:
     """Validation reports uncertainty, label detail, stress, and safe comparison."""
     source, tree = _dl_tcn_ast()
