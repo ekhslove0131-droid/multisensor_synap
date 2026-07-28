@@ -693,7 +693,8 @@ def _write_ml_view_fixture(root: Path) -> None:
             "canonical_time": index,
             "feature_one": float(index % 5),
             "feature_two": float(index // 3),
-            "event_binary": int(is_event),
+            "pattern_binary": int(is_event),
+            "event_binary": int(index % 5 != 0),
             "stage_code": stage_codes[index % len(stage_codes)] if is_event else "NO_EVENT",
         }
         row.update(
@@ -755,9 +756,14 @@ def test_ml_benchmark_contract() -> None:
     assert source.count("WANDB_API_KEY") == 1
     assert "RUN_TRAINING = False" in source
     assert "RUN_LOCKED_TEST = False" in source
+    assert 'PATTERN_TARGET = "pattern_binary"' in source
+    assert 'ONSET_EVENT_TARGET = "event_binary"' in source
 
 
-def test_ml_view_manifest_requires_all_multitask_labels(tmp_path: Path) -> None:
+@pytest.mark.parametrize("missing_target", ["pattern_binary", "event_binary", "stage_code"])
+def test_ml_view_manifest_requires_all_multitask_labels(
+    tmp_path: Path, missing_target: str
+) -> None:
     namespace = ml_benchmark_namespace()
     _write_ml_view_fixture(tmp_path)
 
@@ -769,7 +775,7 @@ def test_ml_view_manifest_requires_all_multitask_labels(tmp_path: Path) -> None:
     assert set(views["validation"]["split_role"]) == {"validation"}
 
     broken = json.loads((tmp_path / "view_manifest.json").read_text())
-    broken["files"]["train"]["columns"].remove("stage_code")
+    broken["files"]["train"]["columns"].remove(missing_target)
     (tmp_path / "view_manifest.json").write_text(json.dumps(broken))
     with pytest.raises(ValueError, match="required columns"):
         namespace["verify_ml_view_manifest"](tmp_path)
@@ -781,7 +787,8 @@ def test_ml_candidates_fit_event_stage_and_behavior_heads() -> None:
         {
             "feature_one": [float(value % 5) for value in range(60)],
             "feature_two": [float(value // 5) for value in range(60)],
-            "event_binary": [int(value % 6 != 0) for value in range(60)],
+            "pattern_binary": [int(value % 6 != 0) for value in range(60)],
+            "event_binary": [0] * 60,
             "stage_code": [
                 namespace["STAGE_CODES"][value % len(namespace["STAGE_CODES"])]
                 if value % 6 != 0
@@ -795,14 +802,49 @@ def test_ml_candidates_fit_event_stage_and_behavior_heads() -> None:
 
     for factory in (namespace["fit_logistic_candidate"], namespace["fit_hgb_candidate"]):
         candidate = factory(frame, ["feature_one", "feature_two"])
-        assert set(candidate) == {"behavior_models", "event_model", "model_name", "stage_models"}
+        assert set(candidate) == {
+            "behavior_models",
+            "model_name",
+            "pattern_model",
+            "stage_models",
+        }
         assert set(candidate["stage_models"]) == set(namespace["STAGE_CODES"])
         assert set(candidate["behavior_models"]) == set(namespace["BEHAVIOR_CODES"])
-        probability = candidate["event_model"].predict_proba(
+        probability = candidate["pattern_model"].predict_proba(
             namespace["_feature_matrix"](frame, ["feature_one", "feature_two"])
         )[:, 1]
         assert probability.shape == (len(frame),)
         assert ((probability >= 0) & (probability <= 1)).all()
+
+
+def test_ml_training_masks_keep_pattern_onset_and_behavior_semantics_distinct() -> None:
+    namespace = ml_benchmark_namespace()
+    frame = pd.DataFrame(
+        {
+            "row_kind": ["low_pre_onset", "onset_audit", "hard_negative", "baseline"],
+            "pattern_binary": [1, 0, 0, 0],
+            "event_binary": [0, 1, 0, 0],
+            "stage_code": ["LOW", "NO_EVENT", "NO_EVENT", "NO_EVENT"],
+        }
+    )
+    for behavior in namespace["BEHAVIOR_CODES"]:
+        frame[behavior] = 0
+    frame.loc[frame["row_kind"].eq("hard_negative"), "ear_covering"] = 1
+
+    stage_rows = frame.loc[namespace["_select_stage_training_rows"](frame), "row_kind"]
+    behavior_rows = frame.loc[namespace["_select_behavior_training_rows"](frame), "row_kind"]
+
+    assert stage_rows.tolist() == ["low_pre_onset"]
+    assert behavior_rows.tolist() == ["low_pre_onset", "hard_negative"]
+    assert frame.loc[frame["row_kind"].eq("onset_audit"), "event_binary"].item() == 1
+    assert frame.loc[frame["row_kind"].eq("onset_audit"), "stage_code"].item() == "NO_EVENT"
+
+
+def test_hgb_candidate_uses_balanced_class_weight() -> None:
+    namespace = ml_benchmark_namespace()
+    estimator = namespace["_make_hgb_estimator"]()
+
+    assert estimator.class_weight == "balanced"
 
 
 def test_validation_helpers_do_not_select_locked_test_metrics() -> None:
@@ -819,7 +861,7 @@ def test_validation_helpers_do_not_select_locked_test_metrics() -> None:
         duration_hours=6 / 3600,
         model_name="logistic_regression",
         split_role="validation",
-        target="event_binary",
+        target="pattern_binary",
     )
     assert set(metrics.columns) == set(namespace["METRIC_COLUMNS"])
     assert "aucpr" in set(metrics["metric"])
@@ -828,7 +870,7 @@ def test_validation_helpers_do_not_select_locked_test_metrics() -> None:
         return {
             "model_name": model_name,
             "split_role": split_role,
-            "target": "event_binary",
+            "target": "pattern_binary",
             "metric": metric,
             "value": value,
         }
