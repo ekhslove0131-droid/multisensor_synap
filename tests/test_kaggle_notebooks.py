@@ -167,7 +167,9 @@ def write_outcome_parquet_fixture(
     stages: pd.DataFrame,
     behaviors: pd.DataFrame,
 ) -> None:
-    (root / "outcomes__outcome_events.parquet").write_text("outcome events")
+    pd.DataFrame(
+        columns=["run_id", "person_id", "event_id", "start_time_ns", "end_time_ns"]
+    ).to_parquet(root / "outcomes__outcome_events.parquet", index=False)
     stages.to_parquet(root / "outcomes__outcome_stages.parquet", index=False)
     behaviors.to_parquet(root / "outcomes__outcome_behaviors.parquet", index=False)
     (root / "outcomes__manifest.json").write_text(
@@ -175,7 +177,9 @@ def write_outcome_parquet_fixture(
             {
                 "series_id": "mvp3-oracle-v1",
                 "files": {
-                    "outcome_events.parquet": sha256_text("outcome events"),
+                    "outcome_events.parquet": hashlib.sha256(
+                        (root / "outcomes__outcome_events.parquet").read_bytes()
+                    ).hexdigest(),
                     "outcome_stages.parquet": hashlib.sha256(
                         (root / "outcomes__outcome_stages.parquet").read_bytes()
                     ).hexdigest(),
@@ -311,13 +315,16 @@ def test_build_ml_role_view_keeps_id_and_type_hard_negatives_and_caps_baselines(
     prepared = pd.DataFrame(
         {
             "person_key": ["train"] * 10,
+            "run_id": ["run"] * 10,
+            "person_id": ["train"] * 10,
             "canonical_time": list(range(10)),
             "feature": list(range(10)),
         }
     )
     labels = complete_multitask_labels(pd.DataFrame(
         {
-                "person_key": ["train"] * 10,
+                "run_id": ["run"] * 10,
+                "person_id": ["train"] * 10,
                 "canonical_time": list(range(10)),
                 "event_binary": [1] + [0] * 9,
                 "hard_negative_id": [None, "negative-id", *([None] * 8)],
@@ -347,13 +354,16 @@ def test_build_ml_role_view_removes_denied_columns_for_every_role(split_role: st
     prepared = pd.DataFrame(
         {
             "person_key": [split_role],
+                "run_id": ["run"],
+                "person_id": [split_role],
             "canonical_time": [0],
             "feature": [1.0],
         }
     )
     labels = complete_multitask_labels(pd.DataFrame(
         {
-            "person_key": [split_role],
+            "run_id": ["run"],
+            "person_id": [split_role],
             "canonical_time": [0],
             "event_binary": [1],
             "event_intensity_truth": [0.9],
@@ -510,24 +520,56 @@ def test_outcome_manifest_rejects_stage_hash_mismatch(tmp_path: Path) -> None:
         namespace["validate_manifest_hashes"](tmp_path)
 
 
-def test_build_ml_role_view_rejects_stage_event_inconsistency() -> None:
+def test_build_ml_role_view_preserves_event_boundary_semantics() -> None:
     namespace = ml_data_namespace()
     namespace["EXPECTED_SPLIT_COUNTS"] = {"train": 1, "validation": 1, "locked_test": 1}
     timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
     prepared = pd.DataFrame({
-        "person_key": ["P1"], "run_id": ["run"], "person_id": ["P1"],
-        "canonical_time": [timestamp], "event_binary": [0], "feature": [1.0],
+        "person_key": ["P1", "P1"], "run_id": ["run", "run"], "person_id": ["P1", "P1"],
+        "canonical_time": [timestamp, timestamp + pd.Timedelta(seconds=1)],
+        "event_binary": [0, 1], "feature": [1.0, 2.0],
     })
     labels = complete_multitask_labels(pd.DataFrame({
-        "run_id": ["run"], "person_id": ["P1"], "canonical_time": [timestamp],
-        "stage_code": ["LOW"], "event_binary": [0],
+        "run_id": ["run", "run"], "person_id": ["P1", "P1"],
+        "canonical_time": [timestamp, timestamp + pd.Timedelta(seconds=1)],
+        "stage_code": ["LOW", "HIGH"], "event_binary": [0, 1],
     }))
     split = pd.DataFrame({"person_key": ["P1"], "split_role": ["validation"]})
 
-    with pytest.raises(ValueError, match="stage/event inconsistency"):
-        namespace["build_ml_role_view"](
-            prepared, labels.drop(columns="event_binary"), split, "validation"
-        )
+    view = namespace["build_ml_role_view"](
+        prepared, labels.drop(columns="event_binary"), split, "validation"
+    )
+
+    assert view["event_binary"].tolist() == [0, 1]
+    assert view["pattern_binary"].tolist() == [1, 1]
+
+
+def test_outcome_labels_propagate_hard_negative_behaviors(tmp_path: Path) -> None:
+    namespace = ml_data_namespace()
+    timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    stages = pd.DataFrame({
+        "run_id": ["run"], "person_id": ["P1"], "timestamp_utc": [timestamp],
+        "event_id": [None], "stage_code": ["NO_EVENT"],
+    })
+    behaviors = pd.DataFrame({
+        "run_id": ["run"], "person_id": ["P1"], "event_id": ["hard-1"],
+        "behavior_code": ["movement_reduction"], "label_value": [1],
+    })
+    write_outcome_parquet_fixture(tmp_path, stages, behaviors)
+    events = pd.DataFrame({
+        "run_id": ["run"], "person_id": ["P1"], "event_id": ["hard-1"],
+        "start_time_ns": [timestamp.value], "end_time_ns": [timestamp.value],
+    })
+    events.to_parquet(tmp_path / "outcomes__outcome_events.parquet", index=False)
+    manifest = json.loads((tmp_path / "outcomes__manifest.json").read_text())
+    manifest["files"]["outcome_events.parquet"] = hashlib.sha256(
+        (tmp_path / "outcomes__outcome_events.parquet").read_bytes()
+    ).hexdigest()
+    (tmp_path / "outcomes__manifest.json").write_text(json.dumps(manifest))
+
+    labels = namespace["_load_outcome_labels"](tmp_path)
+
+    assert labels.loc[0, "movement_reduction"] == 1
 
 
 def _write_ml_view_fixture(root: Path) -> None:
