@@ -1609,6 +1609,8 @@ def _write_strict_ml_views(
     namespace: dict[str, Any],
     source_hash: str,
     split_hash: str,
+    *,
+    include_full_timeline: bool = True,
 ) -> None:
     files: dict[str, dict[str, Any]] = {}
     role_counts = {"train": 24, "validation": 6, "locked_test": 6}
@@ -1630,17 +1632,26 @@ def _write_strict_ml_views(
             "row_count": len(role_frame),
             "columns": list(role_frame.columns),
         }
-    (root / "view_manifest.json").write_text(
-        json.dumps(
-            {
-                "series_id": "mvp3-oracle-v1",
-                "data_status": "oracle/sanity",
-                "source_dataset_hash": source_hash,
-                "split_hash": split_hash,
-                "files": files,
-            }
-        )
-    )
+    full_files = {
+        role: {
+            **metadata,
+            "feature_columns": list(namespace["ALLOWED_FEATURE_COLUMNS"]),
+            "dataset_ids": ["dataset-1"],
+            "view_kind": "full_causal_timeline",
+            "sampled": False,
+        }
+        for role, metadata in files.items()
+    }
+    manifest = {
+        "series_id": "mvp3-oracle-v1",
+        "data_status": "oracle/sanity",
+        "source_dataset_hash": source_hash,
+        "split_hash": split_hash,
+        "files": files,
+    }
+    if include_full_timeline:
+        manifest["dl_timeline_files"] = full_files
+    (root / "view_manifest.json").write_text(json.dumps(manifest))
 
 
 def test_bounded_sequence_build_never_reads_complete_role_parquet(
@@ -1706,8 +1717,10 @@ def test_sequence_build_handles_empty_first_chunk_before_later_window(
     train.to_parquet(train_path, index=False, compression="zstd", row_group_size=1)
     view_manifest_path = views_root / "view_manifest.json"
     view_manifest = json.loads(view_manifest_path.read_text())
-    view_manifest["files"]["train"]["sha256"] = hashlib.sha256(train_path.read_bytes()).hexdigest()
-    view_manifest["files"]["train"]["row_count"] = len(train)
+    view_manifest["dl_timeline_files"]["train"]["sha256"] = hashlib.sha256(
+        train_path.read_bytes()
+    ).hexdigest()
+    view_manifest["dl_timeline_files"]["train"]["row_count"] = len(train)
     view_manifest_path.write_text(json.dumps(view_manifest))
 
     output_root = tmp_path / "output"
@@ -1789,8 +1802,12 @@ def _write_row_grouped_sequence_views(
         writer.close()
     manifest_path = root / "view_manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["files"]["train"]["sha256"] = hashlib.sha256(train_path.read_bytes()).hexdigest()
-    manifest["files"]["train"]["row_count"] = sum(len(group) for group in train_groups)
+    manifest["dl_timeline_files"]["train"]["sha256"] = hashlib.sha256(
+        train_path.read_bytes()
+    ).hexdigest()
+    manifest["dl_timeline_files"]["train"]["row_count"] = sum(
+        len(group) for group in train_groups
+    )
     manifest_path.write_text(json.dumps(manifest))
 
 
@@ -1871,7 +1888,7 @@ def test_verified_role_views_reject_cross_role_feature_type_mismatch(tmp_path: P
     validation.to_parquet(validation_path, index=False, compression="zstd", row_group_size=1)
     manifest_path = views_root / "view_manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["files"]["validation"]["sha256"] = hashlib.sha256(
+    manifest["dl_timeline_files"]["validation"]["sha256"] = hashlib.sha256(
         validation_path.read_bytes()
     ).hexdigest()
     manifest_path.write_text(json.dumps(manifest))
@@ -1971,3 +1988,295 @@ def test_row_group_tail_emits_one_600_second_endpoint_without_crossing_boundary(
     second.loc[0, "canonical_time"] = start + pd.Timedelta(seconds=601)
     broken = namespace["_index_current_chunk"](tail, second, length_seconds=600)
     assert broken.empty
+
+
+def test_full_dl_timeline_keeps_audit_columns_and_injects_dataset_id() -> None:
+    """Removing the full-view builder or selecting audit columns as features must fail."""
+    namespace = ml_data_namespace()
+    namespace["EXPECTED_SPLIT_COUNTS"] = {
+        "train": 1,
+        "validation": 1,
+        "locked_test": 1,
+    }
+    timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    prepared = pd.DataFrame(
+        {
+            "person_key": ["P1", "P1"],
+            "run_id": ["run-1", "run-1"],
+            "person_id": ["P1", "P1"],
+            "canonical_time": [timestamp, timestamp + pd.Timedelta(seconds=1)],
+            "context": ["focused_task", "focused_task"],
+            "event_binary": [0, 1],
+            "forecast_60s": [1, 0],
+            "phase": ["pre_early", "onset"],
+            "autonomic_arousal__robust_z": [0.0, 1.0],
+        }
+    )
+    labels = complete_multitask_labels(
+        pd.DataFrame(
+            {
+                "run_id": ["run-1", "run-1"],
+                "person_id": ["P1", "P1"],
+                "canonical_time": prepared["canonical_time"],
+                "event_binary": [0, 1],
+                "hard_negative": [1, 0],
+            }
+        )
+    )
+    split = pd.DataFrame({"person_key": ["P1"], "split_role": ["train"]})
+
+    view = namespace["build_full_dl_role_view"](
+        prepared,
+        labels,
+        split,
+        "train",
+        dataset_id="prepared-person-1",
+    )
+
+    assert len(view) == 2
+    assert view["dataset_id"].tolist() == ["prepared-person-1"] * 2
+    assert view["split_role"].tolist() == ["train"] * 2
+    assert view["phase"].tolist() == ["pre_early", "onset"]
+    assert view["forecast_60s"].tolist() == [1, 0]
+    assert {"phase", "forecast_60s", "event_binary"}.isdisjoint(
+        namespace["DL_CAUSAL_FEATURE_COLUMNS"]
+    )
+
+
+def test_prepared_people_are_streamed_in_sequence_identity_order() -> None:
+    """Sorting by opaque dataset filename must not make DL identities reappear."""
+    namespace = ml_data_namespace()
+    manifest = {
+        "people": [
+            {
+                "dataset_id": "001-opaque",
+                "person_key": "run-z/P2",
+                "run_id": "run-z",
+                "person_id": "P2",
+            },
+            {
+                "dataset_id": "999-opaque",
+                "person_key": "run-a/P1",
+                "run_id": "run-a",
+                "person_id": "P1",
+            },
+        ]
+    }
+
+    ordered = namespace["ordered_prepared_entries"](manifest)
+
+    assert [entry["dataset_id"] for entry in ordered] == ["999-opaque", "001-opaque"]
+
+
+def test_dl_sequence_consumes_only_manifest_full_timeline_entries(tmp_path: Path) -> None:
+    """Pointing the DL builder at sampled ML files must fail closed."""
+    namespace = dl_sequence_namespace()
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    views_root = tmp_path / "views"
+    views_root.mkdir()
+    _write_strict_ml_views(
+        views_root,
+        namespace,
+        source_hash,
+        split_hash,
+        include_full_timeline=False,
+    )
+
+    with pytest.raises(ValueError, match="full causal timeline"):
+        namespace["_verified_role_views"](views_root, flat_root)
+
+
+def test_dl_sequence_allows_audit_columns_but_never_selects_them() -> None:
+    """Adding phase/forecast audit data must not change the model feature list."""
+    namespace = dl_sequence_namespace()
+    frame = _strict_sequence_frame(namespace)
+    frame["phase"] = "pre_early"
+    frame["forecast_60s"] = 1
+
+    selected = namespace["validate_sequence_role_frame"](frame, "train")
+
+    assert selected == list(namespace["ALLOWED_FEATURE_COLUMNS"])
+    assert {"phase", "forecast_60s", "event_binary"}.isdisjoint(selected)
+
+
+def test_sequence_temp_spools_are_removed_when_role_validation_fails(
+    tmp_path: Path,
+) -> None:
+    """Any exception after raw spool creation must remove Parquet and SQLite temporaries."""
+    namespace = dl_sequence_namespace()
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    views_root = tmp_path / "views"
+    views_root.mkdir()
+    _write_strict_ml_views(views_root, namespace, source_hash, split_hash)
+    manifest_path = views_root / "view_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["dl_timeline_files"] = {}
+    for role, metadata in manifest["files"].items():
+        manifest["dl_timeline_files"][role] = {
+            **metadata,
+            "view_kind": "full_causal_timeline",
+            "sampled": False,
+            "feature_columns": list(namespace["ALLOWED_FEATURE_COLUMNS"]),
+            "dataset_ids": ["dataset-1"],
+        }
+    manifest_path.write_text(json.dumps(manifest))
+    output_root = tmp_path / "output"
+
+    original_make_index = namespace["make_causal_window_index"]
+    calls = 0
+
+    def fail_during_window_write(
+        frame: pd.DataFrame, *, length_seconds: int
+    ) -> pd.DataFrame:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected window-write failure")
+        return original_make_index(frame, length_seconds=length_seconds)
+
+    namespace["make_causal_window_index"] = fail_during_window_write
+    with pytest.raises(RuntimeError, match="injected"):
+        namespace["build_all_sequence_indexes"](
+            flat_dataset_root=flat_root,
+            ml_view_root=views_root,
+            output_root=output_root,
+        )
+
+    assert not list(output_root.glob("goal15-train*.parquet"))
+    assert not list(output_root.glob("goal15-train-sampling-*.sqlite"))
+
+
+def _write_dual_view_fixture(
+    root: Path,
+    namespace: dict[str, Any],
+    source_hash: str,
+    split_hash: str,
+    train_groups: list[pd.DataFrame],
+) -> None:
+    _write_strict_ml_views(root, namespace, source_hash, split_hash)
+    manifest_path = root / "view_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    full_files: dict[str, dict[str, Any]] = {}
+    for role in ("validation", "locked_test"):
+        source_path = root / manifest["files"][role]["path"]
+        frame = pd.read_parquet(source_path)
+        path = root / f"dl_timeline_{role}.parquet"
+        frame.to_parquet(path, index=False, compression="zstd", row_group_size=1)
+        full_files[role] = {
+            "path": path.name,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "row_count": len(frame),
+            "columns": list(frame.columns),
+            "feature_columns": list(namespace["ALLOWED_FEATURE_COLUMNS"]),
+            "dataset_ids": ["dataset-1"],
+            "view_kind": "full_causal_timeline",
+            "sampled": False,
+        }
+    train_path = root / "dl_timeline_train.parquet"
+    schema = namespace["pa"].Table.from_pandas(train_groups[0], preserve_index=False).schema
+    writer = namespace["pq"].ParquetWriter(train_path, schema, compression="zstd")
+    try:
+        for group in train_groups:
+            writer.write_table(
+                namespace["pa"].Table.from_pandas(
+                    group, schema=schema, preserve_index=False
+                )
+            )
+    finally:
+        writer.close()
+    full_files["train"] = {
+        "path": train_path.name,
+        "sha256": hashlib.sha256(train_path.read_bytes()).hexdigest(),
+        "row_count": sum(len(group) for group in train_groups),
+        "columns": list(schema.names),
+        "feature_columns": list(namespace["ALLOWED_FEATURE_COLUMNS"]),
+        "dataset_ids": ["dataset-1"],
+        "view_kind": "full_causal_timeline",
+        "sampled": False,
+    }
+    manifest["files"]["train"]["view_kind"] = "sampled_ml_rows"
+    manifest["files"]["train"]["sampled"] = True
+    manifest["dl_timeline_files"] = full_files
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def test_dual_views_produce_layout_invariant_600s_windows_and_baselines(
+    tmp_path: Path,
+) -> None:
+    """The DL path must use the full view and ignore sampled ML row layout."""
+    namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (600,)
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    timeline_rows = []
+    for second in range(604):
+        row = _strict_sequence_frame(namespace).iloc[0].to_dict()
+        row["person_key"] = "train-00"
+        row["canonical_time"] = start + pd.Timedelta(seconds=second)
+        row["event_binary"] = int(second == 603)
+        row["hard_negative"] = int(second == 600)
+        row["pattern_binary"] = int(second == 603)
+        row["stage_code"] = "LOW" if second == 603 else "NO_EVENT"
+        row["phase"] = "onset" if second == 603 else "none"
+        row["forecast_60s"] = int(543 <= second < 603)
+        timeline_rows.append(row)
+    timeline = pd.DataFrame(timeline_rows)
+    membership = []
+    for index in range(1, 24):
+        row = _strict_sequence_frame(namespace)
+        row["person_key"] = f"train-{index:02d}"
+        row["phase"] = "none"
+        row["forecast_60s"] = 0
+        membership.append(row)
+
+    whole_root = tmp_path / "whole"
+    split_root = tmp_path / "split"
+    whole_root.mkdir()
+    split_root.mkdir()
+    _write_dual_view_fixture(
+        whole_root,
+        namespace,
+        source_hash,
+        split_hash,
+        [timeline, *membership],
+    )
+    _write_dual_view_fixture(
+        split_root,
+        namespace,
+        source_hash,
+        split_hash,
+        [
+            timeline.iloc[:211],
+            timeline.iloc[211:487],
+            timeline.iloc[487:],
+            *membership,
+        ],
+    )
+
+    whole_output = tmp_path / "whole-output"
+    split_output = tmp_path / "split-output"
+    namespace["build_all_sequence_indexes"](
+        flat_dataset_root=flat_root,
+        ml_view_root=whole_root,
+        output_root=whole_output,
+    )
+    namespace["build_all_sequence_indexes"](
+        flat_dataset_root=flat_root,
+        ml_view_root=split_root,
+        output_root=split_output,
+    )
+
+    whole = namespace["pq"].read_table(whole_output / "train_600.parquet").to_pandas()
+    split = namespace["pq"].read_table(split_output / "train_600.parquet").to_pandas()
+    assert len(whole) == 5
+    assert set(whole["sample_type"]) == {
+        "positive_centered",
+        "hard_negative",
+        "matched_baseline",
+    }
+    assert whole.sort_values("window_id").reset_index(drop=True).equals(
+        split.sort_values("window_id").reset_index(drop=True)
+    )
