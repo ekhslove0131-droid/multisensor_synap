@@ -496,6 +496,115 @@ def test_outcome_labels_reject_duplicate_conflicting_behavior_labels(tmp_path: P
         namespace["_load_outcome_labels"](tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("behavior_code", None),
+        ("behavior_code", float("nan")),
+        ("label_value", None),
+        ("label_value", float("nan")),
+        ("label_value", -1),
+        ("label_value", 2),
+        ("label_value", "positive"),
+    ],
+    ids=(
+        "null-code",
+        "nan-code",
+        "null-value",
+        "nan-value",
+        "negative-value",
+        "value-above-one",
+        "nonnumeric-value",
+    ),
+)
+def test_outcome_labels_reject_invalid_behavior_rows_before_pivot(
+    tmp_path: Path,
+    field: str,
+    invalid_value: Any,
+) -> None:
+    namespace = ml_data_namespace()
+    timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    stages = pd.DataFrame({
+        "run_id": ["run"], "person_id": ["P1"], "timestamp_utc": [timestamp],
+        "event_id": ["event"], "stage_code": ["LOW"],
+    })
+    behavior_row: dict[str, list[Any]] = {
+        "run_id": ["run"],
+        "person_id": ["P1"],
+        "event_id": ["event"],
+        "behavior_code": ["ear_covering"],
+        "label_value": [1],
+    }
+    behavior_row[field] = [invalid_value]
+    write_outcome_parquet_fixture(tmp_path, stages, pd.DataFrame(behavior_row))
+
+    with pytest.raises(ValueError, match=field):
+        namespace["_load_outcome_labels"](tmp_path)
+
+
+@pytest.mark.parametrize("label_value", [0, 1])
+def test_outcome_labels_accept_exact_binary_behavior_values(
+    tmp_path: Path,
+    label_value: int,
+) -> None:
+    namespace = ml_data_namespace()
+    timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    stages = pd.DataFrame({
+        "run_id": ["run"], "person_id": ["P1"], "timestamp_utc": [timestamp],
+        "event_id": ["event"], "stage_code": ["LOW"],
+    })
+    behaviors = pd.DataFrame({
+        "run_id": ["run"], "person_id": ["P1"], "event_id": ["event"],
+        "behavior_code": ["ear_covering"], "label_value": [label_value],
+    })
+    write_outcome_parquet_fixture(tmp_path, stages, behaviors)
+
+    labels = namespace["_load_outcome_labels"](tmp_path)
+
+    assert labels.loc[0, "ear_covering"] == label_value
+
+
+def test_write_ml_view_manifest_uses_bounded_metadata_without_reading_role_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = ml_data_namespace()
+    view_paths = {
+        role: tmp_path / f"{role}.parquet"
+        for role in ("train", "validation", "locked_test")
+    }
+    for role, path in view_paths.items():
+        path.write_bytes(f"bounded-{role}".encode())
+    row_counts = {"train": 12, "validation": 5, "locked_test": 7}
+    role_columns = {
+        role: ["person_key", "canonical_time", "feature", "event_binary"]
+        for role in view_paths
+    }
+    real_read_parquet = pd.read_parquet
+
+    def reject_role_output_reads(path: Any, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        if Path(path) in view_paths.values():
+            raise AssertionError("manifest creation loaded a finished role output")
+        return real_read_parquet(path, *args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_parquet", reject_role_output_reads)
+
+    manifest_path = namespace["write_ml_view_manifest"](
+        tmp_path,
+        view_paths,
+        "a" * 64,
+        "b" * 64,
+        row_counts,
+        role_columns,
+    )
+    manifest = json.loads(manifest_path.read_text())
+
+    for role, path in view_paths.items():
+        assert manifest["files"][role]["row_count"] == row_counts[role]
+        assert manifest["files"][role]["columns"] == role_columns[role]
+        assert manifest["files"][role]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 @pytest.mark.parametrize("required_file", ["outcome_stages.parquet", "outcome_behaviors.parquet"])
 def test_outcome_manifest_requires_stage_and_behavior_hashes(
     tmp_path: Path, required_file: str
