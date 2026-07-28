@@ -80,3 +80,23 @@ correction·생리적 lag 분리 검증이 필요합니다.
 - `.pkl`·`.joblib` 산출물 없음
 - 한국어 라우터는 `판정`, `단계`, `분포상태`, 행동 확률을 출력하고
   raw probability를 감사용으로 함께 보존
+
+## 비공개 Kaggle Dataset 게시 증거
+
+- Dataset: `bjcoding/multisensor-goal15-oracle-mvp3`
+- URL: <https://www.kaggle.com/datasets/bjcoding/multisensor-goal15-oracle-mvp3>
+- Kaggle 상태: `ready`
+- 버전: `1`
+- 공개 범위: 비공개 (`isPrivate=true`)
+- 업로드 접수 시각: `2026-07-28T14:17:42.370000Z`
+- 인증 readback 시각: `2026-07-28T14:22:05Z`
+- 원격 데이터 파일: 47개, 총 `10,231,487,879` bytes
+- 로컬 staging: 48개, 총 `10,231,488,144` bytes
+  (`dataset-metadata.json` 1개는 Kaggle 제어 메타데이터이므로 원격 데이터
+  파일 목록에서 제외)
+- 원격 파일명과 파일별 크기는 로컬 예상 인벤토리와 모두 일치
+- 업로드 전 46개 원본 파일은 staging hard link와 inode·SHA-256 일치 확인
+- 원격 인벤토리에 모델, checkpoint, cache, notebook output, credential 없음
+
+이 단계에서는 Dataset만 게시했습니다. Kaggle notebook/kernel push, 모델
+학습, GPU 할당, W&B 로그인, locked-test 실행은 시작하지 않았습니다.
