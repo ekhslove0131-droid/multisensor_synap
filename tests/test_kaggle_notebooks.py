@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -3992,3 +3993,245 @@ def test_round3_bootstrap_and_sequence_policy_are_explicit() -> None:
     assert "SEQUENCE_LENGTH_CANDIDATE = 600" in source
     assert "SEQUENCE_LENGTH_POLICY" in source
     assert "future comparison" in source
+
+
+def test_round4_window_major_iterators_bound_carry_and_stream_expected_rows(
+    tmp_path: Path,
+) -> None:
+    """Prediction and expected-index streams retain at most one window group."""
+    source, tree = _dl_tcn_ast()
+    iterator_node = _named_definition(tree, "iter_window_major_prediction_groups")
+    iterator_source = ast.get_source_segment(source, iterator_node) or ""
+    expected_source = ast.get_source_segment(
+        source, _named_definition(tree, "iter_expected_sequence_windows")
+    ) or ""
+    dataset_source = ast.get_source_segment(
+        source, _named_definition(tree, "Goal15SequenceDataset")
+    ) or ""
+
+    assert "pd.concat" not in iterator_source
+    assert "max_window_rows" in iterator_source
+    assert "iter_batches" in iterator_source
+    assert "iter_batches" in expected_source
+    assert "expected_windows_for_person" not in dataset_source
+    assert "pd.Series" not in expected_source
+
+    rows = []
+    for window in range(30):
+        for target in ("pattern_binary", "stage::LOW", "stage::MEDIUM"):
+            rows.append(
+                {
+                    "person_key": "person-a",
+                    "run_id": "run-a",
+                    "dataset_id": "dataset-a",
+                    "canonical_time": pd.Timestamp(
+                        "2026-01-01", tz="UTC"
+                    ) + pd.Timedelta(seconds=window),
+                    "window_id": f"window-{window:03d}",
+                    "target": target,
+                }
+            )
+    path = tmp_path / "prediction-shard.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), path, row_group_size=4)
+    namespace = {"Path": Path, "pq": pq, "pd": pd}
+    exec(iterator_source, namespace)
+    groups = list(
+        namespace["iter_window_major_prediction_groups"](
+            path, batch_rows=5, max_window_rows=16
+        )
+    )
+    assert len(groups) == 30
+    assert all(group["window_id"].nunique() == 1 for group in groups)
+    assert all(len(group) == 3 for group in groups)
+
+
+def test_round4_streaming_event_grid_is_chunk_boundary_invariant() -> None:
+    """Event maxima and alert-run overlap survive arbitrary chunk boundaries."""
+    source, tree = _dl_tcn_ast()
+    event_source = ast.get_source_segment(
+        source, _named_definition(tree, "StreamingEventGridState")
+    ) or ""
+    assert "alert_truth_overlap" in event_source
+    assert "truth_event_max_bucket" in event_source
+    assert "update_chunk" in event_source
+    namespace = {"np": np, "Any": Any}
+    exec(event_source, namespace)
+    state_class = namespace["StreamingEventGridState"]
+    truth = np.array([0, 1, 1, 0, 0, 1, 0, 0], dtype=np.int8)
+    probability = np.array([0.8, 0.2, 0.9, 0.8, 0.1, 0.7, 0.8, 0.0])
+    whole = state_class(bins=11)
+    whole.update_chunk(truth, probability)
+    whole_result = whole.finalize_person(duration_hours=8 / 3600)
+    chunked = state_class(bins=11)
+    chunked.update_chunk(truth[:3], probability[:3])
+    chunked.update_chunk(truth[3:6], probability[3:6])
+    chunked.update_chunk(truth[6:], probability[6:])
+    chunked_result = chunked.finalize_person(duration_hours=8 / 3600)
+    for key in ("detected", "false_alerts"):
+        np.testing.assert_array_equal(whole_result[key], chunked_result[key])
+    assert whole_result["truth_events"] == chunked_result["truth_events"]
+
+
+def test_round4_ddp_writes_done_markers_before_rank0_cpu_postprocess() -> None:
+    """No CPU aggregation or threshold communication occurs inside the process group."""
+    source, tree = _dl_tcn_ast()
+    runner = ast.get_source_segment(
+        source, _named_definition(tree, "run_dl_training")
+    ) or ""
+    postprocess = ast.get_source_segment(
+        source, _named_definition(tree, "run_rank0_postprocess")
+    ) or ""
+    marker = ast.get_source_segment(
+        source, _named_definition(tree, "write_rank_done_marker")
+    ) or ""
+
+    assert "write_rank_done_marker" in runner
+    assert runner.index("cleanup_ddp()") < runner.index("run_rank0_postprocess")
+    assert "dist.broadcast" not in runner
+    assert "gather_object" not in runner
+    assert "_collect_small_manifests" not in runner
+    assert "rank != 0" in runner
+    assert "rank_done" in marker
+    assert "select_clean_validation" in postprocess
+
+
+def test_round4_ml_champion_exports_all_targets_and_endpoint_coverage() -> None:
+    """ML/DL comparison is recomputed on exact DL-600 validation endpoints."""
+    ml_source = code_cell_source(
+        load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
+    )
+    dl_source, dl_tree = _dl_tcn_ast()
+    comparison = ast.get_source_segment(
+        dl_source, _named_definition(
+            dl_tree, "compare_ml_dl_on_dl600_endpoints"
+        )
+    ) or ""
+
+    assert "validation_champion_predictions.parquet" in ml_source
+    assert "prediction_sha256" in ml_source
+    assert "endpoint_coverage_hash" in ml_source
+    assert "target_model_id" in ml_source
+    assert "STAGE_CODES" in comparison
+    assert "BEHAVIOR_CODES" in comparison
+    assert "endpoint_coverage_hash" in comparison
+    assert "iter_window_major_prediction_groups" in comparison
+    assert "validation" in comparison
+    assert "locked_test" in comparison
+
+
+def test_round4_behavior_metrics_have_per_code_macro_and_micro_support() -> None:
+    """Behavior reporting preserves all ten codes before macro aggregation."""
+    source, tree = _dl_tcn_ast()
+    metrics = ast.get_source_segment(
+        source, _named_definition(tree, "finalize_streaming_metrics")
+    ) or ""
+    for token in (
+        "behavior_code_aucpr",
+        "behavior_code_auroc",
+        "behavior_code_f1",
+        "behavior_positive_support",
+        "behavior_macro_aucpr",
+        "behavior_macro_auroc",
+        "behavior_macro_f1",
+        "behavior_micro_aucpr",
+        "behavior_micro_auroc",
+        "behavior_micro_f1",
+    ):
+        assert token in metrics
+    assert "for code in BEHAVIOR_CODES" in metrics
+    assert "assert_unique_metric_rows" in metrics
+
+
+def test_round4_stress_shift_and_latent_dropout_are_semantically_bounded() -> None:
+    """Time shift never wraps and latent dropout cannot touch time/context columns."""
+    source, tree = _dl_tcn_ast()
+    stress = ast.get_source_segment(
+        source, _named_definition(tree, "deterministic_stress_batch")
+    ) or ""
+    indices_source = ast.get_source_segment(
+        source, _named_definition(tree, "latent_factor_feature_indices")
+    ) or ""
+
+    assert "torch.roll" not in stress
+    assert "invalid_edge" in stress
+    assert "mask" in stress
+    assert "CAUSAL_FACTORS" in stress
+    assert "latent_factor_feature_indices" in stress
+    namespace = {"Sequence": list}
+    exec(indices_source, namespace)
+    columns = [
+        "autonomic_arousal__robust_z",
+        "autonomic_arousal__mean_5s",
+        "autonomic_arousal__std_60s",
+        "autonomic_arousal__slope_300s",
+        "motor_activation__robust_z",
+        "time_sin",
+        "context__sleep",
+    ]
+    selected = namespace["latent_factor_feature_indices"](
+        "autonomic_arousal", columns
+    )
+    assert selected == [0, 1, 2, 3]
+
+
+def test_round4_common_grid_auroc_includes_exact_origin_for_p_equals_one() -> None:
+    """An all-p==1 tie has AUROC 0.5, including the missing ROC origin."""
+    ml_source = code_cell_source(
+        load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
+    )
+    ml_tree = ast.parse(ml_source)
+    ml_hist = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "_common_grid_histogram")
+    ) or ""
+    ml_metric = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "_common_grid_binary_metrics")
+    ) or ""
+    dl_source, dl_tree = _dl_tcn_ast()
+    dl_metric = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "_histogram_binary_metrics")
+    ) or ""
+    namespace = {"np": np, "Any": Any, "COMMON_THRESHOLD_GRID_SIZE": 101}
+    exec(ml_hist + "\n" + ml_metric, namespace)
+    truth = np.array([0, 1], dtype=np.int8)
+    probability = np.array([1.0, 1.0])
+    ml_result = namespace["_common_grid_binary_metrics"](
+        truth, probability, threshold=0.5
+    )
+    assert ml_result["global_auroc"] == pytest.approx(0.5)
+    dl_namespace = {"np": np}
+    exec(dl_metric, dl_namespace)
+    positive = np.zeros(101)
+    negative = np.zeros(101)
+    probability_sum = np.zeros(101)
+    positive[-1] = negative[-1] = 1
+    probability_sum[-1] = 2
+    dl_result = dl_namespace["_histogram_binary_metrics"](
+        positive, negative, probability_sum, 1.0, 50
+    )
+    assert dl_result["global_auroc"] == pytest.approx(0.5)
+
+
+def test_round4_sampler_honors_block_windows_and_batch_locality() -> None:
+    """Configured blocks stay contiguous while only block order changes by epoch."""
+    source, tree = _dl_tcn_ast()
+    sampler = ast.get_source_segment(
+        source, _named_definition(tree, "PersonBlockBatchSampler")
+    ) or ""
+    assert "block_windows" in sampler
+    assert "range(person_range.start, person_range.stop, block_windows)" in sampler
+    assert "batches_per_block" in sampler
+    assert "shuffle(order)" in sampler
+    assert "yield list(block" not in sampler
+
+
+def test_round4_postprocess_writes_stress_degradation_and_unique_support() -> None:
+    """Rank0 postprocess exports clean/stress degradation with fixed threshold identity."""
+    source, tree = _dl_tcn_ast()
+    postprocess = ast.get_source_segment(
+        source, _named_definition(tree, "run_rank0_postprocess")
+    ) or ""
+    assert "compute_noise_degradation" in postprocess
+    assert "degradation.to_parquet" in postprocess
+    assert "threshold_artifact_hash" in postprocess
+    assert "assert_unique_metric_rows" in postprocess
+    assert "fixed_threshold" in postprocess
