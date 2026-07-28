@@ -319,3 +319,25 @@ def test_validate_manifest_hashes_rejects_hash_mismatch(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="hash mismatch"):
         namespace["validate_manifest_hashes"](tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("manifest_name", "hash_field"),
+    [
+        ("prepared__manifest.json", "personal_baseline_sha256"),
+        ("prepared__manifest.json", "source_split_sha256"),
+        ("registry__manifest.json", "records_sha256"),
+    ],
+)
+def test_validate_manifest_hashes_rejects_missing_required_hash_declaration(
+    tmp_path: Path, manifest_name: str, hash_field: str
+) -> None:
+    namespace = ml_data_namespace()
+    write_manifest_fixture(tmp_path)
+    manifest_path = tmp_path / manifest_name
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop(hash_field)
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match=f"missing required hash: {hash_field}"):
+        namespace["validate_manifest_hashes"](tmp_path)
