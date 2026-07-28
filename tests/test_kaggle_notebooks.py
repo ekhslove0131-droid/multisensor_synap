@@ -228,7 +228,8 @@ def test_ruff_excludes_unexecuted_notebooks_and_sdd_workspace() -> None:
     config = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
     excluded = set(config["tool"]["ruff"]["extend-exclude"])
 
-    assert {"kaggle/*.ipynb", ".superpowers"} <= excluded
+    assert excluded == {".superpowers", "kaggle/*.ipynb"}
+    assert not excluded.intersection({"src", "tests", "scripts"})
 
 
 def test_notebooks_have_korean_title_english_purpose_and_oracle_warning() -> None:
