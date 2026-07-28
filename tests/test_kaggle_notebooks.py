@@ -829,6 +829,66 @@ def test_load_ml_views_rejects_wrong_person_count(tmp_path: Path) -> None:
         namespace["load_ml_views"](tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("split_role", "column"),
+    [("validation", "future_label"), ("locked_test", "participant_index")],
+)
+def test_loaded_roles_reject_adversarial_numeric_columns(
+    tmp_path: Path, split_role: str, column: str
+) -> None:
+    namespace = ml_benchmark_namespace()
+    _write_ml_view_fixture(tmp_path)
+    frame = pd.read_parquet(tmp_path / f"{split_role}.parquet")
+    frame[column] = range(len(frame))
+    _rewrite_ml_role_fixture(tmp_path, split_role, frame)
+
+    with pytest.raises(ValueError, match="unapproved columns"):
+        namespace["load_ml_views"](tmp_path)
+
+
+@pytest.mark.parametrize("split_role", ["validation", "locked_test"])
+def test_loaded_roles_require_the_train_feature_schema(
+    tmp_path: Path, split_role: str
+) -> None:
+    namespace = ml_benchmark_namespace()
+    _write_ml_view_fixture(tmp_path)
+    frame = pd.read_parquet(tmp_path / f"{split_role}.parquet").drop(
+        columns="motor_activation__mean_5s"
+    )
+    _rewrite_ml_role_fixture(tmp_path, split_role, frame)
+
+    with pytest.raises(ValueError, match="feature schema mismatch"):
+        namespace["load_ml_views"](tmp_path)
+
+
+@pytest.mark.parametrize("split_role", ["validation", "locked_test"])
+def test_loaded_roles_reject_wrong_approved_feature_dtype(
+    tmp_path: Path, split_role: str
+) -> None:
+    namespace = ml_benchmark_namespace()
+    _write_ml_view_fixture(tmp_path)
+    frame = pd.read_parquet(tmp_path / f"{split_role}.parquet")
+    frame["motor_activation__mean_5s"] = "not-numeric"
+    _rewrite_ml_role_fixture(tmp_path, split_role, frame)
+
+    with pytest.raises(ValueError, match="numeric or bool"):
+        namespace["load_ml_views"](tmp_path)
+
+
+@pytest.mark.parametrize("split_role", ["validation", "locked_test"])
+def test_loaded_roles_reject_nonfinite_approved_features(
+    tmp_path: Path, split_role: str
+) -> None:
+    namespace = ml_benchmark_namespace()
+    _write_ml_view_fixture(tmp_path)
+    frame = pd.read_parquet(tmp_path / f"{split_role}.parquet")
+    frame.loc[frame.index[0], "autonomic_arousal__robust_z"] = float("inf")
+    _rewrite_ml_role_fixture(tmp_path, split_role, frame)
+
+    with pytest.raises(ValueError, match="non-finite"):
+        namespace["load_ml_views"](tmp_path)
+
+
 def test_numeric_feature_contract_handles_task2_shaped_frame_for_both_candidates() -> None:
     namespace = ml_benchmark_namespace()
     rows = 60
@@ -1023,6 +1083,44 @@ def test_behavior_decision_mask_rejects_positive_ordinary_baseline() -> None:
 
     with pytest.raises(ValueError, match="behavior-positive rows must be pattern or hard negative"):
         namespace["_select_behavior_training_rows"](frame)
+
+
+@pytest.mark.parametrize("dtype", ["Int64", "boolean"])
+def test_behavior_decision_mask_rejects_nullable_hard_negative(dtype: str) -> None:
+    namespace = ml_benchmark_namespace()
+    frame = pd.DataFrame(
+        {
+            "pattern_binary": [0],
+            "hard_negative": pd.Series([pd.NA], dtype=dtype),
+        }
+    )
+    for behavior in namespace["BEHAVIOR_CODES"]:
+        frame[behavior] = 0
+    frame.loc[0, "ear_covering"] = 1
+
+    with pytest.raises(ValueError, match="hard_negative contains null"):
+        namespace["_select_behavior_training_rows"](frame)
+
+
+@pytest.mark.parametrize("dtype", ["Int64", "boolean"])
+def test_behavior_decision_mask_returns_strict_bool_for_valid_nullable_dtype(
+    dtype: str,
+) -> None:
+    namespace = ml_benchmark_namespace()
+    frame = pd.DataFrame(
+        {
+            "pattern_binary": [1, 0, 0, 0],
+            "hard_negative": pd.Series([0, 1, 1, 0], dtype=dtype),
+        }
+    )
+    for behavior in namespace["BEHAVIOR_CODES"]:
+        frame[behavior] = 0
+    frame.loc[1, "ear_covering"] = 1
+
+    mask = namespace["_select_behavior_training_rows"](frame)
+
+    assert mask.dtype == bool
+    assert mask.tolist() == [True, True, False, False]
 
 
 def test_prediction_rows_apply_target_specific_decision_masks() -> None:
