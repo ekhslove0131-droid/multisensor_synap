@@ -46,6 +46,19 @@ def normalize_cell_source(source: Any) -> str:
     return ""
 
 
+def code_cell_source(notebook: dict[str, Any]) -> str:
+    sources = []
+    for cell in notebook["cells"]:
+        if cell["cell_type"] != "code":
+            continue
+        source = cell.get("source")
+        if isinstance(source, list):
+            sources.append("\n".join(source))
+        elif isinstance(source, str):
+            sources.append(source)
+    return "\n".join(sources)
+
+
 def test_notebooks_have_required_structure() -> None:
     for path, notebook in load_notebooks().items():
         cell_types = {cell["cell_type"] for cell in notebook["cells"]}
@@ -104,3 +117,33 @@ def test_notebooks_declare_shared_safety_constants() -> None:
         source = notebook_source(notebook)
         for constant in SHARED_CONSTANTS:
             assert constant in source, path
+
+
+def test_ml_data_contract() -> None:
+    """The ML data notebook exposes the safe row-view preparation contract."""
+    path = KAGGLE_DIR / "01_ml_data.ipynb"
+    notebook = load_notebooks()[path]
+    source = notebook_source(notebook)
+    compile(code_cell_source(notebook), str(path), "exec")
+
+    expected_definitions = (
+        "resolve_kaggle_dataset_root",
+        "load_split_registry",
+        "validate_split_contract",
+        "validate_manifest_hashes",
+        "assert_no_truth_leakage",
+        "build_ml_role_view",
+        "write_ml_view_manifest",
+    )
+    for definition in expected_definitions:
+        assert f"def {definition}(" in source
+
+    assert 'ML_OUTPUT_ROOT = Path("/kaggle/working/goal15_ml_view")' in source
+    assert '    "active_target_",' in source
+    assert '    "hard_negative_id",' in source
+    assert '    "hard_negative_type",' in source
+    assert '    "artifact_schedule_id",' in source
+    assert '    "participant_truth_baseline",' in source
+    assert '    "event_intensity_truth",' in source
+    assert "RUN_DATA_PREPARATION = False" in source
+    assert "if RUN_DATA_PREPARATION:" in source
