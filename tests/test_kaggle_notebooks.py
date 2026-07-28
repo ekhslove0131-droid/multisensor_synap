@@ -26,6 +26,18 @@ SHARED_CONSTANTS = (
     "RUN_TRAINING = False",
     "RUN_LOCKED_TEST = False",
 )
+BEHAVIOR_CODES = (
+    "ear_covering",
+    "exit_attempt",
+    "head_turn_away",
+    "motion_freeze",
+    "movement_reduction",
+    "repetitive_body_movement",
+    "repetitive_hand_movement",
+    "repetitive_object_contact",
+    "sustained_pressure_or_contact",
+    "withdrawal_movement",
+)
 
 
 def load_notebooks() -> dict[Path, dict[str, Any]]:
@@ -93,6 +105,10 @@ def write_manifest_fixture(root: Path) -> None:
     personal_baseline.write_text("personal baseline")
     outcome_events = root / "outcomes__outcome_events.parquet"
     outcome_events.write_text("outcome events")
+    outcome_stages = root / "outcomes__outcome_stages.parquet"
+    outcome_stages.write_text("outcome stages")
+    outcome_behaviors = root / "outcomes__outcome_behaviors.parquet"
+    outcome_behaviors.write_text("outcome behaviors")
     registry_records = root / "registry__registry.jsonl"
     registry_records.write_text(
         json.dumps({"dataset_id": "person-1", "logical_hash": "a" * 64}) + "\n"
@@ -113,7 +129,11 @@ def write_manifest_fixture(root: Path) -> None:
         json.dumps(
             {
                 "series_id": "mvp3-oracle-v1",
-                "files": {"outcome_events.parquet": sha256_text("outcome events")},
+                "files": {
+                    "outcome_events.parquet": sha256_text("outcome events"),
+                    "outcome_stages.parquet": sha256_text("outcome stages"),
+                    "outcome_behaviors.parquet": sha256_text("outcome behaviors"),
+                },
             }
         )
     )
@@ -125,6 +145,44 @@ def write_manifest_fixture(root: Path) -> None:
                     json.dumps({"dataset_id": "person-1", "logical_hash": "a" * 64})
                     + "\n"
                 ),
+            }
+        )
+    )
+
+
+def complete_multitask_labels(labels: pd.DataFrame) -> pd.DataFrame:
+    completed = labels.copy()
+    if "stage_code" not in completed:
+        completed["stage_code"] = completed["event_binary"].map(
+            {0: "NO_EVENT", 1: "LOW"}
+        )
+    for behavior_code in BEHAVIOR_CODES:
+        if behavior_code not in completed:
+            completed[behavior_code] = 0
+    return completed
+
+
+def write_outcome_parquet_fixture(
+    root: Path,
+    stages: pd.DataFrame,
+    behaviors: pd.DataFrame,
+) -> None:
+    (root / "outcomes__outcome_events.parquet").write_text("outcome events")
+    stages.to_parquet(root / "outcomes__outcome_stages.parquet", index=False)
+    behaviors.to_parquet(root / "outcomes__outcome_behaviors.parquet", index=False)
+    (root / "outcomes__manifest.json").write_text(
+        json.dumps(
+            {
+                "series_id": "mvp3-oracle-v1",
+                "files": {
+                    "outcome_events.parquet": sha256_text("outcome events"),
+                    "outcome_stages.parquet": hashlib.sha256(
+                        (root / "outcomes__outcome_stages.parquet").read_bytes()
+                    ).hexdigest(),
+                    "outcome_behaviors.parquet": hashlib.sha256(
+                        (root / "outcomes__outcome_behaviors.parquet").read_bytes()
+                    ).hexdigest(),
+                },
             }
         )
     )
@@ -257,15 +315,15 @@ def test_build_ml_role_view_keeps_id_and_type_hard_negatives_and_caps_baselines(
             "feature": list(range(10)),
         }
     )
-    labels = pd.DataFrame(
+    labels = complete_multitask_labels(pd.DataFrame(
         {
-            "person_key": ["train", "train", "train"],
-            "canonical_time": [0, 1, 2],
-            "event_binary": [1, 0, 0],
-            "hard_negative_id": [None, "negative-id", None],
-            "hard_negative_type": [None, None, "artifact-only"],
+                "person_key": ["train"] * 10,
+                "canonical_time": list(range(10)),
+                "event_binary": [1] + [0] * 9,
+                "hard_negative_id": [None, "negative-id", *([None] * 8)],
+                "hard_negative_type": [None, None, "artifact-only", *([None] * 7)],
         }
-    )
+    ))
     split = pd.DataFrame({"person_key": ["train"], "split_role": ["train"]})
 
     view = namespace["build_ml_role_view"](prepared, labels, split, "train")
@@ -293,7 +351,7 @@ def test_build_ml_role_view_removes_denied_columns_for_every_role(split_role: st
             "feature": [1.0],
         }
     )
-    labels = pd.DataFrame(
+    labels = complete_multitask_labels(pd.DataFrame(
         {
             "person_key": [split_role],
             "canonical_time": [0],
@@ -302,7 +360,7 @@ def test_build_ml_role_view_removes_denied_columns_for_every_role(split_role: st
             "active_target_event": [1],
             "hard_negative_id": ["not-a-feature"],
         }
-    )
+    ))
     split = pd.DataFrame({"person_key": [split_role], "split_role": [split_role]})
 
     view = namespace["build_ml_role_view"](prepared, labels, split, split_role)
@@ -348,6 +406,128 @@ def test_validate_manifest_hashes_rejects_missing_required_hash_declaration(
 
     with pytest.raises(ValueError, match=f"missing required hash: {hash_field}"):
         namespace["validate_manifest_hashes"](tmp_path)
+
+
+def test_outcome_labels_materialize_stage_and_behavior_columns(tmp_path: Path) -> None:
+    namespace = ml_data_namespace()
+    timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    stages = pd.DataFrame(
+        {
+            "run_id": ["run", "run", "run"],
+            "person_id": ["P1", "P1", "P1"],
+            "timestamp_utc": [
+                timestamp,
+                timestamp + pd.Timedelta(seconds=1),
+                timestamp + pd.Timedelta(seconds=2),
+            ],
+            "event_id": ["target-1", None, "hard-negative-1"],
+            "stage_code": ["LOW", "NO_EVENT", "NO_EVENT"],
+        }
+    )
+    behaviors = pd.DataFrame(
+        {
+            "run_id": ["run", "run", "run"],
+            "person_id": ["P1", "P1", "P1"],
+            "event_id": ["target-1", "target-1", "hard-negative-1"],
+            "behavior_code": ["ear_covering", "exit_attempt", "movement_reduction"],
+            "label_value": [1, 1, 1],
+        }
+    )
+    write_outcome_parquet_fixture(tmp_path, stages, behaviors)
+
+    labels = namespace["_load_outcome_labels"](tmp_path)
+
+    assert set(BEHAVIOR_CODES).issubset(labels.columns)
+    target = labels.loc[labels["event_id"] == "target-1"].iloc[0]
+    non_event = labels.loc[labels["event_id"].isna()].iloc[0]
+    hard_negative = labels.loc[labels["event_id"] == "hard-negative-1"].iloc[0]
+    assert target["ear_covering"] == 1
+    assert target["exit_attempt"] == 1
+    assert (non_event[list(BEHAVIOR_CODES)] == 0).all()
+    assert hard_negative["movement_reduction"] == 1
+
+
+def test_outcome_labels_reject_unknown_behavior_code(tmp_path: Path) -> None:
+    namespace = ml_data_namespace()
+    timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    stages = pd.DataFrame({
+        "run_id": ["run"], "person_id": ["P1"], "timestamp_utc": [timestamp],
+        "event_id": ["event"], "stage_code": ["LOW"],
+    })
+    behaviors = pd.DataFrame({
+        "run_id": ["run"], "person_id": ["P1"], "event_id": ["event"],
+        "behavior_code": ["unknown"], "label_value": [1],
+    })
+    write_outcome_parquet_fixture(tmp_path, stages, behaviors)
+
+    with pytest.raises(ValueError, match="unknown behavior"):
+        namespace["_load_outcome_labels"](tmp_path)
+
+
+def test_outcome_labels_reject_duplicate_conflicting_behavior_labels(tmp_path: Path) -> None:
+    namespace = ml_data_namespace()
+    timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    stages = pd.DataFrame({
+        "run_id": ["run"], "person_id": ["P1"], "timestamp_utc": [timestamp],
+        "event_id": ["event"], "stage_code": ["LOW"],
+    })
+    behaviors = pd.DataFrame(
+        {
+            "run_id": ["run", "run"],
+            "person_id": ["P1", "P1"],
+            "event_id": ["event", "event"],
+            "behavior_code": ["ear_covering", "ear_covering"],
+            "label_value": [0, 1],
+        }
+    )
+    write_outcome_parquet_fixture(tmp_path, stages, behaviors)
+
+    with pytest.raises(ValueError, match="conflicting behavior"):
+        namespace["_load_outcome_labels"](tmp_path)
+
+
+@pytest.mark.parametrize("required_file", ["outcome_stages.parquet", "outcome_behaviors.parquet"])
+def test_outcome_manifest_requires_stage_and_behavior_hashes(
+    tmp_path: Path, required_file: str
+) -> None:
+    namespace = ml_data_namespace()
+    write_manifest_fixture(tmp_path)
+    manifest_path = tmp_path / "outcomes__manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"].pop(required_file)
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match=f"missing required outcome hash: {required_file}"):
+        namespace["validate_manifest_hashes"](tmp_path)
+
+
+def test_outcome_manifest_rejects_stage_hash_mismatch(tmp_path: Path) -> None:
+    namespace = ml_data_namespace()
+    write_manifest_fixture(tmp_path)
+    (tmp_path / "outcomes__outcome_stages.parquet").write_text("modified")
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        namespace["validate_manifest_hashes"](tmp_path)
+
+
+def test_build_ml_role_view_rejects_stage_event_inconsistency() -> None:
+    namespace = ml_data_namespace()
+    namespace["EXPECTED_SPLIT_COUNTS"] = {"train": 1, "validation": 1, "locked_test": 1}
+    timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    prepared = pd.DataFrame({
+        "person_key": ["P1"], "run_id": ["run"], "person_id": ["P1"],
+        "canonical_time": [timestamp], "event_binary": [0], "feature": [1.0],
+    })
+    labels = complete_multitask_labels(pd.DataFrame({
+        "run_id": ["run"], "person_id": ["P1"], "canonical_time": [timestamp],
+        "stage_code": ["LOW"], "event_binary": [0],
+    }))
+    split = pd.DataFrame({"person_key": ["P1"], "split_role": ["validation"]})
+
+    with pytest.raises(ValueError, match="stage/event inconsistency"):
+        namespace["build_ml_role_view"](
+            prepared, labels.drop(columns="event_binary"), split, "validation"
+        )
 
 
 def _write_ml_view_fixture(root: Path) -> None:
