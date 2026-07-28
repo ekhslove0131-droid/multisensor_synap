@@ -4235,3 +4235,203 @@ def test_round4_postprocess_writes_stress_degradation_and_unique_support() -> No
     assert "threshold_artifact_hash" in postprocess
     assert "assert_unique_metric_rows" in postprocess
     assert "fixed_threshold" in postprocess
+
+
+def test_round5_run_nonce_isolation_rejects_stale_rank_markers(tmp_path: Path) -> None:
+    """A marker from an earlier nonce-specific directory cannot satisfy this run."""
+    source, tree = _dl_tcn_ast()
+    launcher = ast.get_source_segment(
+        source, _named_definition(tree, "launch_dual_t4_torchrun")
+    ) or ""
+    root_source = ast.get_source_segment(
+        source, _named_definition(tree, "create_nonce_run_root")
+    ) or ""
+    marker = ast.get_source_segment(
+        source, _named_definition(tree, "write_rank_done_marker")
+    ) or ""
+    waiter = ast.get_source_segment(
+        source, _named_definition(tree, "wait_for_rank_done_markers")
+    ) or ""
+    receipt = ast.get_source_segment(
+        source, _named_definition(tree, "_probability_manifest_receipt")
+    ) or ""
+    sha = ast.get_source_segment(
+        source, _named_definition(tree, "sha256_file")
+    ) or ""
+
+    assert "uuid.uuid4" in launcher
+    assert "GOAL15_RUN_NONCE" in launcher
+    assert "exist_ok=False" in root_source
+    for token in ("run_nonce", "sequence_hash", "model_hash"):
+        assert token in marker
+        assert token in waiter
+    assert "sha256_file" in waiter
+
+    namespace = {
+        "Path": Path,
+        "hashlib": hashlib,
+        "json": json,
+        "time": __import__("time"),
+        "Any": Any,
+        "Mapping": dict,
+        "Sequence": list,
+    }
+    exec(sha + "\n" + root_source + "\n" + receipt + "\n" + marker + "\n" + waiter, namespace)
+    stale_root = namespace["create_nonce_run_root"](tmp_path, "stale-run")
+    current_root = namespace["create_nonce_run_root"](tmp_path, "current-run")
+    shard = stale_root / "clean.parquet"
+    shard.write_text("stale probability shard")
+    manifest = stale_root / "clean.manifest.json"
+    manifest.write_text(json.dumps({
+        "path": shard.name,
+        "sha256": namespace["sha256_file"](shard),
+    }))
+    namespace["write_rank_done_marker"](
+        stale_root,
+        rank=0,
+        run_nonce="stale-run",
+        source_dataset_hash="source",
+        split_hash="split",
+        sequence_hash="sequence",
+        model_hash="model",
+        probability_manifests={"clean": manifest, "stress": {}},
+        requested_conditions=(),
+        executed_conditions=(),
+    )
+    assert current_root != stale_root
+    assert not (current_root / "rank_done" / "rank-0.json").exists()
+    with pytest.raises(TimeoutError, match="current nonce"):
+        namespace["wait_for_rank_done_markers"](
+            current_root,
+            world_size=1,
+            run_nonce="current-run",
+            source_dataset_hash="source",
+            split_hash="split",
+            sequence_hash="sequence",
+            model_hash="model",
+            timeout_seconds=0.0,
+        )
+
+
+def test_round5_ml_dl_event_alert_runs_have_identical_overlap_semantics() -> None:
+    """One predicted run overlapping truth once is one true alert, not false fragments."""
+    ml_source = code_cell_source(
+        load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
+    )
+    ml_tree = ast.parse(ml_source)
+    ml_segments = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "_segments")
+    ) or ""
+    ml_event = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "_common_grid_event_statistics")
+    ) or ""
+    ml_select = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "select_validation_threshold")
+    ) or ""
+    dl_source, dl_tree = _dl_tcn_ast()
+    dl_event = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "StreamingEventGridState")
+    ) or ""
+    dl_select = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "select_clean_validation_threshold")
+    ) or ""
+    namespace = {
+        "np": np,
+        "pd": pd,
+        "Any": Any,
+        "Sequence": list,
+        "Mapping": dict,
+        "COMMON_THRESHOLD_GRID_SIZE": 101,
+    }
+    exec(ml_segments + "\n" + ml_event + "\n" + ml_select, namespace)
+    exec(dl_event + "\n" + dl_select, namespace)
+    truth = np.array([0, 1, 1, 0], dtype=np.int8)
+    probability = np.array([0.8, 0.8, 0.8, 0.8])
+    times = pd.date_range("2026-01-01", periods=4, freq="s", tz="UTC")
+    frame = pd.DataFrame({
+        "person_key": "person-a",
+        "canonical_time": times,
+        "label": truth,
+        "probability": probability,
+    })
+    ml_statistics = namespace["_common_grid_event_statistics"](frame)
+    ml_threshold = namespace["select_validation_threshold"](
+        truth, probability, np.repeat("person-a", 4), times.to_numpy(),
+        duration_hours=4 / 3600,
+    )
+    dl_state = namespace["StreamingEventGridState"](bins=101)
+    dl_state.update_chunk(truth[:2], probability[:2])
+    dl_state.update_chunk(truth[2:], probability[2:])
+    dl_statistics = dl_state.finalize_person(duration_hours=4 / 3600)
+    dl_threshold, _ = namespace["select_clean_validation_threshold"]([
+        {"event": dl_statistics}
+    ])
+    threshold_index = round(ml_threshold * 100)
+    assert ml_threshold == dl_threshold == pytest.approx(0.8)
+    assert ml_statistics["detected"][threshold_index] == 1
+    assert dl_statistics["detected"][threshold_index] == 1
+    assert ml_statistics["false_alerts"][threshold_index] == 0
+    assert dl_statistics["false_alerts"][threshold_index] == 0
+
+
+def test_round5_noise_stress_flag_controls_requested_and_executed_passes() -> None:
+    """A disabled stress flag performs clean validation only and records that fact."""
+    source, tree = _dl_tcn_ast()
+    selector = ast.get_source_segment(
+        source, _named_definition(tree, "requested_stress_conditions")
+    ) or ""
+    runner = ast.get_source_segment(
+        source, _named_definition(tree, "run_dl_training")
+    ) or ""
+    marker = ast.get_source_segment(
+        source, _named_definition(tree, "write_rank_done_marker")
+    ) or ""
+    postprocess = ast.get_source_segment(
+        source, _named_definition(tree, "run_rank0_postprocess")
+    ) or ""
+    namespace = {"Sequence": list}
+    exec(selector, namespace)
+    conditions = ("gaussian_005", "block_missing_5")
+    assert namespace["requested_stress_conditions"](False, conditions) == ()
+    assert namespace["requested_stress_conditions"](True, conditions) == conditions
+    assert "requested_stress_conditions" in runner
+    assert "RUN_NOISE_STRESS" in runner
+    assert "requested_conditions" in marker
+    assert "executed_conditions" in marker
+    assert "STRESS_CONDITIONS" not in postprocess
+    assert "requested_conditions" in postprocess
+
+
+def test_round5_streaming_stage_and_forecast_outputs_are_complete() -> None:
+    """Final streaming metrics retain full stage confusion and causal lead summaries."""
+    source, tree = _dl_tcn_ast()
+    state = ast.get_source_segment(
+        source, _named_definition(tree, "StreamingEvaluationState")
+    ) or ""
+    metrics = ast.get_source_segment(
+        source, _named_definition(tree, "finalize_streaming_metrics")
+    ) or ""
+    postprocess = ast.get_source_segment(
+        source, _named_definition(tree, "run_rank0_postprocess")
+    ) or ""
+
+    assert "stage_confusion" in state
+    assert "forecast_truth_active" in state
+    assert "forecast_alert_active" in state
+    assert "forecast_lead_seconds" in state
+    for token in (
+        "stage_confusion_count",
+        "stage_global_recall",
+        "stage_person_macro_recall",
+        "stage_macro_f1",
+        "stage_balanced_accuracy",
+        "forecast_lead_mean_seconds",
+        "forecast_lead_median_seconds",
+        "forecast_lead_support",
+    ):
+        assert token in metrics
+    assert "for actual in STAGE_CODES" in metrics
+    assert "for predicted in STAGE_CODES" in metrics
+    assert "no predicted alert before onset" in state
+    assert "assert_unique_metric_rows" in metrics
+    assert "stage_confusion.to_parquet" in postprocess
