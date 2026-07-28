@@ -1346,6 +1346,7 @@ def _sequence_source_frame() -> pd.DataFrame:
 
 def test_make_causal_window_index_rejects_boundary_and_missing_block_crossings() -> None:
     namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
     frame = _sequence_source_frame()
     frame.loc[2, "missing_block"] = True
     frame.loc[6, "session_id"] = "session-2"
@@ -1363,6 +1364,7 @@ def test_make_causal_window_index_rejects_boundary_and_missing_block_crossings()
 
 def test_make_causal_window_index_honors_declared_date_boundaries() -> None:
     namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
     frame = _sequence_source_frame().drop(columns="day_key")
     frame["date"] = ["2026-01-01"] * 3 + ["2026-01-02"] * 5
 
@@ -1399,6 +1401,7 @@ def test_fit_train_normalization_uses_only_train_people() -> None:
 
 def test_sample_training_windows_is_deterministic_and_retains_required_windows() -> None:
     namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
     frame = _sequence_source_frame()
     frame["pattern_binary"] = 0
     frame["hard_negative"] = 0
@@ -1584,7 +1587,7 @@ def test_matched_baseline_sampling_stays_in_person_run_context_stratum() -> None
             "person_key": ["P1", "P1", "P1", "P2", "P2", "P2"],
             "run_id": ["run"] * 6,
             "dataset_id": ["dataset"] * 6,
-            "context": ["A", "A", "B", "A", "A", "A"],
+            "context": ["sleep", "sleep", "transition", "sleep", "sleep", "sleep"],
             "split_role": ["train"] * 6,
             "pattern_binary": [1, 0, 0, 0, 0, 0],
             "hard_negative": [0] * 6,
@@ -1597,7 +1600,7 @@ def test_matched_baseline_sampling_stays_in_person_run_context_stratum() -> None
     sampled = namespace["sample_training_windows"](index, baseline_multiplier=3)
 
     assert set(sampled["person_key"]) == {"P1"}
-    assert set(sampled["context"]) == {"A"}
+    assert set(sampled["context"]) == {"sleep"}
     assert len(sampled.loc[sampled["sample_type"] == "matched_baseline"]) == 1
 
 
@@ -1666,6 +1669,57 @@ def test_bounded_sequence_build_never_reads_complete_role_parquet(
 
     assert manifest_path.is_file()
     assert (output_root / "train_300.parquet").is_file()
+    empty_index = namespace["pq"].read_table(output_root / "train_300.parquet")
+    assert empty_index.num_rows == 0
+    assert empty_index.schema.equals(namespace["sequence_index_arrow_schema"]())
+
+
+def test_sequence_build_handles_empty_first_chunk_before_later_window(
+    tmp_path: Path,
+) -> None:
+    namespace = dl_sequence_namespace()
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    views_root = tmp_path / "views"
+    views_root.mkdir()
+    _write_strict_ml_views(views_root, namespace, source_hash, split_hash)
+
+    first = _strict_sequence_frame(namespace)
+    first["person_key"] = "train-00"
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    first["canonical_time"] = start - pd.Timedelta(seconds=2)
+    later_rows = []
+    for second in range(300):
+        row = _strict_sequence_frame(namespace).iloc[0].to_dict()
+        row["person_key"] = "train-00"
+        row["canonical_time"] = start + pd.Timedelta(seconds=second)
+        row["pattern_binary"] = 1
+        row["stage_code"] = "LOW"
+        later_rows.append(row)
+    membership_rows = []
+    for index in range(1, 24):
+        row = _strict_sequence_frame(namespace)
+        row["person_key"] = f"train-{index:02d}"
+        membership_rows.append(row)
+    train = pd.concat([first, pd.DataFrame(later_rows), *membership_rows], ignore_index=True)
+    train_path = views_root / "train.parquet"
+    train.to_parquet(train_path, index=False, compression="zstd", row_group_size=1)
+    view_manifest_path = views_root / "view_manifest.json"
+    view_manifest = json.loads(view_manifest_path.read_text())
+    view_manifest["files"]["train"]["sha256"] = hashlib.sha256(train_path.read_bytes()).hexdigest()
+    view_manifest["files"]["train"]["row_count"] = len(train)
+    view_manifest_path.write_text(json.dumps(view_manifest))
+
+    output_root = tmp_path / "output"
+    namespace["build_all_sequence_indexes"](
+        flat_dataset_root=flat_root,
+        ml_view_root=views_root,
+        output_root=output_root,
+    )
+
+    emitted = namespace["pq"].read_table(output_root / "train_300.parquet")
+    assert emitted.num_rows == 1
+    assert emitted.schema.equals(namespace["sequence_index_arrow_schema"]())
 
 
 def test_verified_role_views_reject_cross_role_feature_type_mismatch(tmp_path: Path) -> None:
@@ -1689,3 +1743,96 @@ def test_verified_role_views_reject_cross_role_feature_type_mismatch(tmp_path: P
 
     with pytest.raises(ValueError, match="feature schema mismatch"):
         namespace["_verified_role_views"](views_root, flat_root)
+
+
+@pytest.mark.parametrize(
+    "column,value",
+    [
+        ("person_key", 9),
+        ("run_id", " run"),
+        ("dataset_id", ""),
+        ("context", "unapproved"),
+    ],
+)
+def test_sequence_contract_rejects_noncanonical_identity_and_context_domain(
+    column: str, value: Any
+) -> None:
+    namespace = dl_sequence_namespace()
+    frame = _strict_sequence_frame(namespace)
+    frame[column] = value
+
+    with pytest.raises(ValueError, match=r"identity|context"):
+        namespace["validate_sequence_role_frame"](frame, "train")
+
+
+def test_make_causal_window_index_rejects_invalid_length_time_and_duplicate_id() -> None:
+    namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
+    frame = _sequence_source_frame()
+
+    with pytest.raises(ValueError, match="length_seconds"):
+        namespace["make_causal_window_index"](frame, length_seconds=4)
+    duplicate = frame.copy()
+    duplicate.loc[1, "canonical_time"] = duplicate.loc[0, "canonical_time"]
+    with pytest.raises(ValueError, match="duplicate"):
+        namespace["make_causal_window_index"](duplicate, length_seconds=3)
+    naive = frame.copy()
+    naive["canonical_time"] = naive["canonical_time"].dt.tz_localize(None)
+    with pytest.raises(ValueError, match="UTC"):
+        namespace["make_causal_window_index"](naive, length_seconds=3)
+
+
+def test_memmap_normalization_is_deterministic_and_removes_temporary_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    namespace = dl_sequence_namespace()
+    feature = namespace["ALLOWED_FEATURE_COLUMNS"][0]
+    path = tmp_path / "train.parquet"
+    pd.DataFrame({feature: [1.0, 3.0, 5.0, 7.0]}).to_parquet(
+        path, index=False, row_group_size=2
+    )
+
+    def reject_concatenate(*args: Any, **kwargs: Any) -> np.ndarray:
+        raise AssertionError("normalization must not concatenate feature chunks")
+
+    monkeypatch.setattr(np, "concatenate", reject_concatenate)
+    first = namespace["fit_train_normalization_from_role_file"](
+        path,
+        feature_columns=[feature],
+        source_hash="a" * 64,
+        temporary_directory=tmp_path,
+    )
+    second = namespace["fit_train_normalization_from_role_file"](
+        path,
+        feature_columns=[feature],
+        source_hash="a" * 64,
+        temporary_directory=tmp_path,
+    )
+
+    assert first == second
+    assert first["features"][feature] == {"median": 4.0, "iqr": 3.0}
+    assert not list(tmp_path.glob("goal15-normalization-*.mmap"))
+
+
+def test_row_group_tail_emits_one_600_second_endpoint_without_crossing_boundary() -> None:
+    namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (600,)
+    base = _strict_sequence_frame(namespace).iloc[0].to_dict()
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    rows = []
+    for second in range(600):
+        row = dict(base)
+        row["canonical_time"] = start + pd.Timedelta(seconds=second)
+        rows.append(row)
+    first = pd.DataFrame(rows[:300])
+    second = pd.DataFrame(rows[300:])
+
+    tail = namespace["_combine_contiguous_tail"](pd.DataFrame(), first, max_length=600)
+    index = namespace["_index_current_chunk"](tail, second, length_seconds=600)
+
+    assert len(index) == 1
+    assert index.loc[0, "window_start"] == start
+    assert index.loc[0, "window_end"] == start + pd.Timedelta(seconds=599)
+    second.loc[0, "canonical_time"] = start + pd.Timedelta(seconds=601)
+    broken = namespace["_index_current_chunk"](tail, second, length_seconds=600)
+    assert broken.empty
