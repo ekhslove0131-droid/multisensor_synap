@@ -81,7 +81,7 @@ def ml_data_namespace() -> dict[str, Any]:
     safe_cells = []
     for cell in notebook["cells"]:
         source = normalize_cell_source(cell.get("source"))
-        if cell["cell_type"] == "code" and "RUN_DATA_PREPARATION = False" not in source:
+        if cell["cell_type"] == "code" and "if RUN_DATA_PREPARATION:" not in source:
             safe_cells.append("\n".join(cell["source"]))
     namespace: dict[str, Any] = {}
     exec("\n".join(safe_cells), namespace)
@@ -92,6 +92,19 @@ def ml_benchmark_namespace() -> dict[str, Any]:
     notebook = load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
     namespace: dict[str, Any] = {}
     exec(code_cell_source(notebook), namespace)
+    return namespace
+
+
+def dl_sequence_namespace() -> dict[str, Any]:
+    """Load only definitions from the unexecuted DL sequence notebook."""
+    notebook = load_notebooks()[KAGGLE_DIR / "03_dl_sequence_data.ipynb"]
+    safe_cells = []
+    for cell in notebook["cells"]:
+        source = normalize_cell_source(cell.get("source"))
+        if cell["cell_type"] == "code" and "RUN_DATA_PREPARATION = False" not in source:
+            safe_cells.append("\n".join(cell["source"]))
+    namespace: dict[str, Any] = {}
+    exec("\n".join(safe_cells), namespace)
     return namespace
 
 
@@ -1280,3 +1293,170 @@ def test_people_bootstrap_returns_ordered_confidence_interval() -> None:
     interval = namespace["bootstrap_people_ci"](frame, iterations=50, random_state=7)
 
     assert 0.0 <= interval["lower"] <= interval["estimate"] <= interval["upper"] <= 1.0
+
+
+def test_dl_sequence_contract() -> None:
+    """The DL data notebook indexes only bounded causal windows."""
+    path = KAGGLE_DIR / "03_dl_sequence_data.ipynb"
+    notebook = load_notebooks()[path]
+    source = notebook_source(notebook)
+
+    expected_definitions = (
+        "validate_shared_dataset_identity",
+        "fit_train_normalization",
+        "make_causal_window_index",
+        "assert_window_boundaries",
+        "sample_training_windows",
+        "write_sequence_manifest",
+    )
+    for definition in expected_definitions:
+        assert f"def {definition}(" in source
+
+    assert "SEQUENCE_LENGTHS_SECONDS = (300, 600)" in source
+    assert 'SEQUENCE_OUTPUT_ROOT = Path("/kaggle/working/goal15_dl_sequences")' in source
+    assert "window_end >= window_start" in source
+    assert "person_key" in source
+    assert 'split_role"].eq("train")' in source
+    assert "RUN_DATA_PREPARATION = False" in source
+    assert "if RUN_DATA_PREPARATION:" in source
+
+
+def _sequence_source_frame() -> pd.DataFrame:
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    rows = []
+    for second in range(8):
+        rows.append(
+            {
+                "person_key": "P1",
+                "run_id": "run-1",
+                "dataset_id": "dataset-1",
+                "session_id": "session-1",
+                "day_key": "2026-01-01",
+                "canonical_time": start + pd.Timedelta(seconds=second),
+                "split_role": "train",
+                "missing_block": False,
+                "feature_a": float(second),
+                "pattern_binary": int(second == 3),
+                "hard_negative": int(second == 4),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def test_make_causal_window_index_rejects_boundary_and_missing_block_crossings() -> None:
+    namespace = dl_sequence_namespace()
+    frame = _sequence_source_frame()
+    frame.loc[2, "missing_block"] = True
+    frame.loc[6, "session_id"] = "session-2"
+
+    index = namespace["make_causal_window_index"](frame, length_seconds=3)
+
+    namespace["assert_window_boundaries"](index)
+    assert set(index["prediction_time"]) == {frame.loc[5, "canonical_time"]}
+    assert (index["window_end"] == index["prediction_time"]).all()
+    assert (
+        index["window_start"]
+        == index["prediction_time"] - pd.Timedelta(seconds=2)
+    ).all()
+
+
+def test_make_causal_window_index_honors_declared_date_boundaries() -> None:
+    namespace = dl_sequence_namespace()
+    frame = _sequence_source_frame().drop(columns="day_key")
+    frame["date"] = ["2026-01-01"] * 3 + ["2026-01-02"] * 5
+
+    index = namespace["make_causal_window_index"](frame, length_seconds=3)
+
+    assert set(index["prediction_time"]) == {
+        frame.loc[2, "canonical_time"],
+        frame.loc[5, "canonical_time"],
+        frame.loc[6, "canonical_time"],
+        frame.loc[7, "canonical_time"],
+    }
+
+
+def test_fit_train_normalization_uses_only_train_people() -> None:
+    namespace = dl_sequence_namespace()
+    frame = pd.DataFrame(
+        {
+            "person_key": ["train-a", "train-b", "validation-a", "validation-b"],
+            "split_role": ["train", "train", "validation", "validation"],
+            "feature_a": [1.0, 3.0, 100.0, 200.0],
+        }
+    )
+
+    statistics = namespace["fit_train_normalization"](
+        frame,
+        feature_columns=["feature_a"],
+        source_hash="a" * 64,
+    )
+
+    assert statistics["fit_split_role"] == "train"
+    assert statistics["source_hash"] == "a" * 64
+    assert statistics["features"]["feature_a"] == {"median": 2.0, "iqr": 1.0}
+
+
+def test_sample_training_windows_is_deterministic_and_retains_required_windows() -> None:
+    namespace = dl_sequence_namespace()
+    frame = _sequence_source_frame()
+    frame["pattern_binary"] = 0
+    frame["hard_negative"] = 0
+    frame.loc[3, "pattern_binary"] = 1
+    frame.loc[4, "hard_negative"] = 1
+    index = namespace["make_causal_window_index"](frame, length_seconds=3)
+
+    first = namespace["sample_training_windows"](index, baseline_multiplier=3)
+    second = namespace["sample_training_windows"](index, baseline_multiplier=3)
+
+    assert first.equals(second)
+    assert {"positive_centered", "hard_negative", "matched_baseline"} == set(
+        first["sample_type"]
+    )
+    assert len(first.loc[first["sample_type"] == "matched_baseline"]) == 3
+    assert len(first.loc[first["sample_type"] == "positive_centered"]) == 1
+    assert len(first.loc[first["sample_type"] == "hard_negative"]) == 1
+
+
+def test_validate_shared_dataset_identity_rejects_changed_split_hash() -> None:
+    namespace = dl_sequence_namespace()
+    manifest = {
+        "series_id": "mvp3-oracle-v1",
+        "data_status": "oracle/sanity",
+        "source_dataset_hash": "a" * 64,
+        "split_hash": "b" * 64,
+    }
+
+    assert namespace["validate_shared_dataset_identity"](manifest) == ("a" * 64, "b" * 64)
+    manifest["split_hash"] = "wrong"
+    with pytest.raises(ValueError, match="split hash"):
+        namespace["validate_shared_dataset_identity"](manifest)
+
+
+def test_write_sequence_manifest_hashes_indexes_and_train_statistics(tmp_path: Path) -> None:
+    namespace = dl_sequence_namespace()
+    index_paths = {
+        "train_300": tmp_path / "train_300.parquet",
+        "validation_300": tmp_path / "validation_300.parquet",
+    }
+    for name, path in index_paths.items():
+        path.write_bytes(name.encode())
+    statistics_path = tmp_path / "train_normalization.json"
+    statistics_path.write_text('{"fit_split_role":"train"}\n')
+
+    manifest_path = namespace["write_sequence_manifest"](
+        tmp_path,
+        index_paths=index_paths,
+        normalization_path=statistics_path,
+        source_dataset_hash="a" * 64,
+        split_hash="b" * 64,
+        row_counts={"train_300": 4, "validation_300": 6},
+    )
+    manifest = json.loads(manifest_path.read_text())
+
+    assert manifest["normalization"]["sha256"] == hashlib.sha256(
+        statistics_path.read_bytes()
+    ).hexdigest()
+    assert manifest["files"]["train_300"]["row_count"] == 4
+    assert manifest["files"]["validation_300"]["sha256"] == hashlib.sha256(
+        index_paths["validation_300"].read_bytes()
+    ).hexdigest()
