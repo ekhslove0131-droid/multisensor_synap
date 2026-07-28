@@ -2222,6 +2222,7 @@ def test_full_dl_timeline_keeps_audit_columns_and_injects_dataset_id() -> None:
 def test_prepared_people_are_streamed_in_sequence_identity_order() -> None:
     """Sorting by opaque dataset filename must not make DL identities reappear."""
     namespace = ml_data_namespace()
+    namespace["EXPECTED_SPLIT_COUNTS"] = {"train": 2}
     manifest = {
         "people": [
             {
@@ -2242,6 +2243,159 @@ def test_prepared_people_are_streamed_in_sequence_identity_order() -> None:
     ordered = namespace["ordered_prepared_entries"](manifest)
 
     assert [entry["dataset_id"] for entry in ordered] == ["999-opaque", "001-opaque"]
+
+
+def _prepared_manifest_preflight_fixture(
+    root: Path, mutation: str
+) -> tuple[list[dict[str, str]], pd.DataFrame]:
+    role_people = {
+        "train": [f"train-{index:02d}" for index in range(24)],
+        "validation": [f"validation-{index:02d}" for index in range(6)],
+        "locked_test": [f"locked-{index:02d}" for index in range(6)],
+    }
+    split = pd.DataFrame(
+        [
+            {"person_key": person_key, "split_role": role}
+            for role, people in role_people.items()
+            for person_key in people
+        ]
+    )
+    entries = [
+        {
+            "person_key": person_key,
+            "run_id": f"run-{person_key}",
+            "person_id": f"person-{person_key}",
+            "dataset_id": f"source-{person_key}",
+        }
+        for person_key in split["person_key"]
+    ]
+    if mutation == "duplicate_entry":
+        entries.append(dict(entries[0]))
+    elif mutation == "same_person_different_dataset":
+        entries[1]["person_key"] = entries[0]["person_key"]
+        entries[1]["run_id"] = entries[0]["run_id"]
+        entries[1]["person_id"] = entries[0]["person_id"]
+    elif mutation == "different_person_same_dataset":
+        entries[1]["dataset_id"] = entries[0]["dataset_id"]
+    elif mutation == "missing_person":
+        entries.pop()
+    elif mutation == "extra_person":
+        entries.append(
+            {
+                "person_key": "extra-00",
+                "run_id": "run-extra-00",
+                "person_id": "person-extra-00",
+                "dataset_id": "source-extra-00",
+            }
+        )
+    elif mutation == "resolved_path_alias":
+        pass
+    elif mutation == "missing_extra_person":
+        entries[-1] = {
+            "person_key": "extra-00",
+            "run_id": "run-extra-00",
+            "person_id": "person-extra-00",
+            "dataset_id": "source-extra-00",
+        }
+    else:
+        raise AssertionError(f"unknown mutation: {mutation}")
+
+    written: set[str] = set()
+    for entry in entries:
+        if entry["dataset_id"] in written:
+            continue
+        written.add(entry["dataset_id"])
+        pd.DataFrame(
+            {
+                "person_key": [entry["person_key"]],
+                "run_id": [entry["run_id"]],
+                "person_id": [entry["person_id"]],
+                "canonical_time": [pd.Timestamp("2026-01-01T00:00:00Z")],
+            }
+        ).to_parquet(
+            root / f"prepared__people__{entry['dataset_id']}.parquet",
+            index=False,
+        )
+    if mutation == "resolved_path_alias":
+        alias = root / f"prepared__people__{entries[1]['dataset_id']}.parquet"
+        alias.unlink()
+        alias.symlink_to(f"prepared__people__{entries[0]['dataset_id']}.parquet")
+    pd.DataFrame(split).to_parquet(root / "registry__splits.parquet", index=False)
+    (root / "prepared__manifest.json").write_text(json.dumps({"people": entries}))
+    return entries, split
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("duplicate_entry", r"duplicate prepared manifest (entry|tuple)"),
+        (
+            "same_person_different_dataset",
+            r"duplicate prepared manifest person_key",
+        ),
+        (
+            "different_person_same_dataset",
+            r"duplicate prepared manifest (dataset_id|physical source)",
+        ),
+        ("missing_person", r"prepared manifest must declare exactly 36 entries"),
+        ("extra_person", r"prepared manifest must declare exactly 36 entries"),
+        (
+            "missing_extra_person",
+            r"prepared manifest people must exactly match split registry",
+        ),
+        (
+            "resolved_path_alias",
+            r"duplicate prepared manifest physical source path",
+        ),
+    ],
+)
+def test_prepared_manifest_preflight_fails_before_any_writer_or_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    message: str,
+) -> None:
+    """Every manifest alias/coverage failure must precede both ML/DL writers."""
+    namespace = ml_data_namespace()
+    _, split = _prepared_manifest_preflight_fixture(tmp_path, mutation)
+    output_root = tmp_path / "output"
+    writer_calls = 0
+
+    def reject_writer(*args: Any, **kwargs: Any) -> Any:
+        nonlocal writer_calls
+        writer_calls += 1
+        raise AssertionError("writer creation occurred before prepared preflight")
+
+    monkeypatch.setitem(
+        namespace,
+        "validate_manifest_hashes",
+        lambda dataset_root: {
+            "prepared__manifest.json": "a" * 64,
+            "outcomes__manifest.json": "b" * 64,
+            "registry__manifest.json": "c" * 64,
+        },
+    )
+    monkeypatch.setitem(namespace, "load_split_registry", lambda dataset_root: split)
+    monkeypatch.setitem(namespace["pq"].__dict__, "ParquetWriter", reject_writer)
+    monkeypatch.setitem(
+        namespace,
+        "_load_outcome_labels",
+        lambda dataset_root, run_id, person_id: pd.DataFrame(),
+    )
+    monkeypatch.setitem(
+        namespace,
+        "build_ml_role_view",
+        lambda prepared, labels, split, split_role: pd.DataFrame({"value": [1]}),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        namespace["build_all_ml_views"](
+            flat_dataset_root=tmp_path,
+            output_root=output_root,
+        )
+
+    assert writer_calls == 0
+    assert not output_root.exists()
 
 
 def test_dl_sequence_consumes_only_manifest_full_timeline_entries(tmp_path: Path) -> None:
@@ -2501,6 +2655,11 @@ def test_source_dataset_identity_binds_physical_prepared_parquet_bytes(
 ) -> None:
     """Changing prepared bytes must change the source identity without trusting logical_hash."""
     namespace = ml_data_namespace()
+    namespace["EXPECTED_SPLIT_COUNTS"] = {
+        "train": 1,
+        "validation": 1,
+        "locked_test": 1,
+    }
     people = _write_physical_prepared_fixture(tmp_path)
     manifest_hashes = {
         "prepared__manifest.json": "a" * 64,
@@ -2540,6 +2699,11 @@ def test_source_dataset_identity_changes_for_row_count_and_schema_mutation(
 ) -> None:
     """Prepared row-count and schema changes cannot retain a prior source identity."""
     namespace = ml_data_namespace()
+    namespace["EXPECTED_SPLIT_COUNTS"] = {
+        "train": 1,
+        "validation": 1,
+        "locked_test": 1,
+    }
     people = _write_physical_prepared_fixture(tmp_path)
     manifest_hashes = {
         "prepared__manifest.json": "a" * 64,
@@ -2578,6 +2742,11 @@ def test_source_inventory_rejects_manifest_run_id_that_differs_from_physical_row
 ) -> None:
     """A logical registry run_id cannot override physical prepared row identity."""
     namespace = ml_data_namespace()
+    namespace["EXPECTED_SPLIT_COUNTS"] = {
+        "train": 1,
+        "validation": 1,
+        "locked_test": 1,
+    }
     people = _write_physical_prepared_fixture(tmp_path)
     pd.DataFrame(
         {
