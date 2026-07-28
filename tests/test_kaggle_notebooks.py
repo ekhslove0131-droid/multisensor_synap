@@ -75,6 +75,13 @@ def ml_data_namespace() -> dict[str, Any]:
     return namespace
 
 
+def ml_benchmark_namespace() -> dict[str, Any]:
+    notebook = load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
+    namespace: dict[str, Any] = {}
+    exec(code_cell_source(notebook), namespace)
+    return namespace
+
+
 def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -341,3 +348,186 @@ def test_validate_manifest_hashes_rejects_missing_required_hash_declaration(
 
     with pytest.raises(ValueError, match=f"missing required hash: {hash_field}"):
         namespace["validate_manifest_hashes"](tmp_path)
+
+
+def _write_ml_view_fixture(root: Path) -> None:
+    namespace = ml_benchmark_namespace()
+    behavior_columns = list(namespace["BEHAVIOR_CODES"])
+    rows: list[dict[str, Any]] = []
+    stage_codes = list(namespace["STAGE_CODES"])
+    for index in range(30):
+        is_event = index % 6 != 0
+        row: dict[str, Any] = {
+            "person_key": f"person-{index % 3}",
+            "canonical_time": index,
+            "feature_one": float(index % 5),
+            "feature_two": float(index // 3),
+            "event_binary": int(is_event),
+            "stage_code": stage_codes[index % len(stage_codes)] if is_event else "NO_EVENT",
+        }
+        row.update(
+            {
+                column: int((index + offset) % 3 == 0)
+                for offset, column in enumerate(behavior_columns)
+            }
+        )
+        rows.append(row)
+
+    files: dict[str, dict[str, Any]] = {}
+    for split_role in ("train", "validation", "locked_test"):
+        path = root / f"{split_role}.parquet"
+        frame = pd.DataFrame(rows)
+        frame.to_parquet(path, index=False)
+        files[split_role] = {
+            "path": path.name,
+            "sha256": namespace["sha256_file"](path),
+            "row_count": len(frame),
+            "columns": list(frame.columns),
+        }
+    (root / "view_manifest.json").write_text(
+        json.dumps(
+            {
+                "series_id": "mvp3-oracle-v1",
+                "data_status": "oracle/sanity",
+                "source_dataset_hash": "a" * 64,
+                "split_hash": "b" * 64,
+                "files": files,
+            }
+        )
+    )
+
+
+def test_ml_benchmark_contract() -> None:
+    """The ML notebook is CPU-only, compiled, and secrets are Kaggle-only."""
+    path = KAGGLE_DIR / "02_ml_benchmark.ipynb"
+    notebook = load_notebooks()[path]
+    source = notebook_source(notebook)
+    compile(code_cell_source(notebook), str(path), "exec")
+
+    expected_definitions = (
+        "load_ml_views",
+        "verify_ml_view_manifest",
+        "fit_logistic_candidate",
+        "fit_hgb_candidate",
+        "select_validation_threshold",
+        "compute_common_metrics",
+        "bootstrap_people_ci",
+        "select_validation_champion",
+        "login_wandb_from_kaggle_secret",
+    )
+    for definition in expected_definitions:
+        assert f"def {definition}(" in source
+
+    assert "CUDA_VISIBLE_DEVICES" not in source
+    assert 'device = "cpu"' in source
+    assert source.count('UserSecretsClient().get_secret("WANDB_API_KEY")') == 1
+    assert source.count("WANDB_API_KEY") == 1
+    assert "RUN_TRAINING = False" in source
+    assert "RUN_LOCKED_TEST = False" in source
+
+
+def test_ml_view_manifest_requires_all_multitask_labels(tmp_path: Path) -> None:
+    namespace = ml_benchmark_namespace()
+    _write_ml_view_fixture(tmp_path)
+
+    manifest = namespace["verify_ml_view_manifest"](tmp_path)
+    views = namespace["load_ml_views"](tmp_path)
+
+    assert set(manifest["files"]) == {"train", "validation", "locked_test"}
+    assert set(views) == {"train", "validation", "locked_test"}
+    assert set(views["validation"]["split_role"]) == {"validation"}
+
+    broken = json.loads((tmp_path / "view_manifest.json").read_text())
+    broken["files"]["train"]["columns"].remove("stage_code")
+    (tmp_path / "view_manifest.json").write_text(json.dumps(broken))
+    with pytest.raises(ValueError, match="required columns"):
+        namespace["verify_ml_view_manifest"](tmp_path)
+
+
+def test_ml_candidates_fit_event_stage_and_behavior_heads() -> None:
+    namespace = ml_benchmark_namespace()
+    frame = pd.DataFrame(
+        {
+            "feature_one": [float(value % 5) for value in range(60)],
+            "feature_two": [float(value // 5) for value in range(60)],
+            "event_binary": [int(value % 6 != 0) for value in range(60)],
+            "stage_code": [
+                namespace["STAGE_CODES"][value % len(namespace["STAGE_CODES"])]
+                if value % 6 != 0
+                else "NO_EVENT"
+                for value in range(60)
+            ],
+        }
+    )
+    for offset, behavior in enumerate(namespace["BEHAVIOR_CODES"]):
+        frame[behavior] = [int((value + offset) % 3 == 0) for value in range(60)]
+
+    for factory in (namespace["fit_logistic_candidate"], namespace["fit_hgb_candidate"]):
+        candidate = factory(frame, ["feature_one", "feature_two"])
+        assert set(candidate) == {"behavior_models", "event_model", "model_name", "stage_models"}
+        assert set(candidate["stage_models"]) == set(namespace["STAGE_CODES"])
+        assert set(candidate["behavior_models"]) == set(namespace["BEHAVIOR_CODES"])
+        probability = candidate["event_model"].predict_proba(
+            namespace["_feature_matrix"](frame, ["feature_one", "feature_two"])
+        )[:, 1]
+        assert probability.shape == (len(frame),)
+        assert ((probability >= 0) & (probability <= 1)).all()
+
+
+def test_validation_helpers_do_not_select_locked_test_metrics() -> None:
+    namespace = ml_benchmark_namespace()
+    truth = pd.Series([0, 0, 1, 1, 0, 0], dtype="int8")
+    probability = pd.Series([0.1, 0.2, 0.9, 0.8, 0.7, 0.1], dtype="float64")
+    threshold = namespace["select_validation_threshold"](
+        truth.to_numpy(), probability.to_numpy(), duration_hours=6 / 3600
+    )
+    metrics = namespace["compute_common_metrics"](
+        truth.to_numpy(),
+        probability.to_numpy(),
+        threshold=threshold,
+        duration_hours=6 / 3600,
+        model_name="logistic_regression",
+        split_role="validation",
+        target="event_binary",
+    )
+    assert set(metrics.columns) == set(namespace["METRIC_COLUMNS"])
+    assert "aucpr" in set(metrics["metric"])
+
+    def metric_row(model_name: str, split_role: str, metric: str, value: float) -> dict[str, Any]:
+        return {
+            "model_name": model_name,
+            "split_role": split_role,
+            "target": "event_binary",
+            "metric": metric,
+            "value": value,
+        }
+
+    candidates = pd.DataFrame(
+        [
+            metric_row("logistic_regression", "validation", "aucpr", 0.70),
+            metric_row("logistic_regression", "validation", "event_recall", 0.80),
+            metric_row("logistic_regression", "validation", "false_alerts_per_hour", 2.0),
+            metric_row("logistic_regression", "validation", "ece", 0.2),
+            metric_row("hist_gradient_boosting", "validation", "aucpr", 0.70),
+            metric_row("hist_gradient_boosting", "validation", "event_recall", 0.80),
+            metric_row("hist_gradient_boosting", "validation", "false_alerts_per_hour", 1.0),
+            metric_row("hist_gradient_boosting", "validation", "ece", 0.1),
+            metric_row("hist_gradient_boosting", "locked_test", "aucpr", 1.0),
+        ]
+    )
+    assert namespace["select_validation_champion"](candidates) == "hist_gradient_boosting"
+
+
+def test_people_bootstrap_returns_ordered_confidence_interval() -> None:
+    namespace = ml_benchmark_namespace()
+    frame = pd.DataFrame(
+        {
+            "person_key": ["a", "a", "b", "b", "c", "c"],
+            "label": [0, 1, 0, 1, 0, 1],
+            "probability": [0.1, 0.9, 0.2, 0.8, 0.3, 0.7],
+        }
+    )
+
+    interval = namespace["bootstrap_people_ci"](frame, iterations=50, random_state=7)
+
+    assert 0.0 <= interval["lower"] <= interval["estimate"] <= interval["upper"] <= 1.0
