@@ -6,6 +6,7 @@ import ast
 import hashlib
 import json
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -126,6 +127,11 @@ def dl_tcn_namespace() -> dict[str, Any]:
         "_physical_split_assignments",
         "recompute_physical_dataset_identity",
         "_metric_identity_hashes",
+        "_required_ml_champion_targets",
+        "_require_nonempty_string",
+        "_validate_ml_champion_endpoint_targets",
+        "_validate_ml_champion_prediction_stream",
+        "_validate_ml_champion_metrics",
         "discover_attached_goal15_inputs",
         "discover_ml_champion_artifact",
     )
@@ -141,10 +147,12 @@ def dl_tcn_namespace() -> dict[str, Any]:
     sequence_namespace = dl_sequence_namespace()
     namespace: dict[str, Any] = {
         "Any": Any,
+        "Mapping": Mapping,
         "Path": Path,
         "dataclass": dataclass,
         "hashlib": hashlib,
         "json": json,
+        "np": np,
         "pa": pa,
         "pd": pd,
         "pq": pq,
@@ -166,6 +174,38 @@ def dl_tcn_namespace() -> dict[str, Any]:
             "ALLOWED_FEATURE_COLUMNS"
         ],
         "ATTACHED_INPUT_ROOT": Path("/kaggle/input"),
+        "ML_CHAMPION_PREDICTION_BATCH_ROWS": 4096,
+        "ML_CHAMPION_METRICS_BATCH_ROWS": 4096,
+        "ML_CHAMPION_METRICS_MAX_BYTES": 64 * 1024 * 1024,
+        "ML_CHAMPION_PREDICTION_COLUMNS": (
+            "model_family",
+            "model_name",
+            "series_id",
+            "dataset_id",
+            "run_id",
+            "person_key",
+            "day_key",
+            "session_id",
+            "canonical_time",
+            "split_role",
+            "target",
+            "label",
+            "probability",
+            "threshold",
+            "target_model_id",
+        ),
+        "ML_CHAMPION_METRIC_COLUMNS": (
+            "model_family",
+            "model_name",
+            "series_id",
+            "split_role",
+            "target",
+            "metric",
+            "value",
+            "support",
+            "data_status",
+            "stress_condition",
+        ),
     }
     exec(selected_source, namespace)
     namespace["AttachedGoal15Inputs"] = dataclass(frozen=True)(
@@ -4218,6 +4258,18 @@ def test_round3_ml_champion_artifact_is_identity_safe_and_one_to_one() -> None:
     comparison = ast.get_source_segment(
         dl_source, _named_definition(dl_tree, "write_validation_model_comparison")
     ) or ""
+    prediction_validation = ast.get_source_segment(
+        dl_source,
+        _named_definition(
+            dl_tree, "_validate_ml_champion_prediction_stream"
+        ),
+    ) or ""
+    metrics_validation = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "_validate_ml_champion_metrics")
+    ) or ""
+    consumer_source = "\n".join(
+        (discovery, prediction_validation, metrics_validation, comparison)
+    )
 
     assert "COMMON_THRESHOLD_GRID_SIZE" in ml_source
     assert "write_validation_champion_artifact" in ml_source
@@ -4235,7 +4287,7 @@ def test_round3_ml_champion_artifact_is_identity_safe_and_one_to_one() -> None:
         "targets",
     ):
         assert token in ml_source
-        assert token in discovery or token in comparison
+        assert token in consumer_source
     assert "sha256_file" in discovery
     assert "validate='one_to_one'" in comparison
     assert "locked_test" in comparison
@@ -5524,36 +5576,50 @@ def _write_ml_champion_handoff_fixture(
     split_hash: str,
     label_hash: str,
     feature_hash: str,
-) -> None:
+    endpoint_count: int = 1,
+    duplicate_last_target: bool = False,
+    endpoint_coverage_hash: str | None = None,
+) -> tuple[Path, Path, Path]:
     root.mkdir(parents=True, exist_ok=True)
-    timestamp = pd.Timestamp("2026-01-01T00:10:00Z")
     targets = [
         "pattern_binary",
         *[f"stage::{stage}" for stage in ("LOW", "MEDIUM", "HIGH", "DECREASING", "RECOVERY")],
         *[f"behavior::{behavior}" for behavior in BEHAVIOR_CODES],
     ]
-    predictions = pd.DataFrame(
-        [
-            {
-                "model_family": "machine_learning",
-                "model_name": "logistic_regression",
-                "series_id": "mvp3-oracle-v1",
-                "dataset_id": "source-validation-00",
-                "run_id": "run-1",
-                "person_key": "validation-00",
-                "day_key": "2026-01-01",
-                "session_id": "session-1",
-                "canonical_time": timestamp,
-                "split_role": "validation",
-                "target": target,
-                "label": 0,
-                "probability": 0.1,
-                "threshold": 0.5,
-                "target_model_id": f"logistic_regression::{target}",
-            }
-            for target in targets
-        ]
-    )
+    endpoint_rows = [
+        (
+            f"source-validation-{endpoint_index:02d}",
+            "run-1",
+            f"validation-{endpoint_index:02d}",
+            pd.Timestamp("2026-01-01T00:10:00Z")
+            + pd.Timedelta(seconds=endpoint_index),
+        )
+        for endpoint_index in range(endpoint_count)
+    ]
+    prediction_rows = [
+        {
+            "model_family": "machine_learning",
+            "model_name": "logistic_regression",
+            "series_id": "mvp3-oracle-v1",
+            "dataset_id": dataset_id,
+            "run_id": run_id,
+            "person_key": person_key,
+            "day_key": "2026-01-01",
+            "session_id": "session-1",
+            "canonical_time": timestamp,
+            "split_role": "validation",
+            "target": target,
+            "label": 0,
+            "probability": 0.1,
+            "threshold": 0.5,
+            "target_model_id": f"logistic_regression::{target}",
+        }
+        for dataset_id, run_id, person_key, timestamp in endpoint_rows
+        for target in targets
+    ]
+    if duplicate_last_target:
+        prediction_rows.append(dict(prediction_rows[-1]))
+    predictions = pd.DataFrame(prediction_rows)
     metrics = pd.DataFrame(
         [
             {
@@ -5564,7 +5630,7 @@ def _write_ml_champion_handoff_fixture(
                 "target": target,
                 "metric": "aucpr",
                 "value": 0.5,
-                "support": 1,
+                "support": endpoint_count,
                 "data_status": "oracle/sanity",
                 "stress_condition": "clean",
             }
@@ -5575,21 +5641,17 @@ def _write_ml_champion_handoff_fixture(
     metrics_path = root / "validation_champion_metrics.parquet"
     predictions.to_parquet(prediction_path, index=False)
     metrics.to_parquet(metrics_path, index=False)
-    endpoint_payload = (
-        "\x1f".join(
-            map(
-                str,
-                (
-                    "source-validation-00",
-                    "run-1",
-                    "validation-00",
-                    timestamp,
-                ),
+    endpoint_payload = "".join(
+        (
+            "\x1f".join(
+                map(str, (dataset_id, run_id, person_key, timestamp))
             )
+            + "\n"
         )
-        + "\n"
+        for dataset_id, run_id, person_key, timestamp in endpoint_rows
     )
-    (root / "validation_champion_predictions.manifest.json").write_text(
+    manifest_path = root / "validation_champion_predictions.manifest.json"
+    manifest_path.write_text(
         json.dumps(
             {
                 "schema_version": "goal1.5/ml-validation-champion-predictions/v1",
@@ -5597,9 +5659,8 @@ def _write_ml_champion_handoff_fixture(
                 "split_hash": split_hash,
                 "label_schema_hash": label_hash,
                 "feature_schema_hash": feature_hash,
-                "endpoint_coverage_hash": hashlib.sha256(
-                    endpoint_payload.encode()
-                ).hexdigest(),
+                "endpoint_coverage_hash": endpoint_coverage_hash
+                or hashlib.sha256(endpoint_payload.encode()).hexdigest(),
                 "prediction_sha256": hashlib.sha256(
                     prediction_path.read_bytes()
                 ).hexdigest(),
@@ -5617,6 +5678,7 @@ def _write_ml_champion_handoff_fixture(
             sort_keys=True,
         )
     )
+    return prediction_path, metrics_path, manifest_path
 
 
 def test_raw_dataset_resolver_is_recursive_unique_and_hash_validated(
@@ -5716,6 +5778,197 @@ def test_notebooks_resolve_standalone_attached_handoffs_fail_closed(
             input_root=input_root,
             working_root=working_root / "goal15_ml_view",
         )
+
+
+def test_ml_champion_discovery_streams_prediction_across_batch_boundaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_hash = "a" * 64
+    split_hash = "b" * 64
+    sequence_namespace = dl_sequence_namespace()
+    label_hash, feature_hash = _handoff_schema_hashes(
+        tuple(sequence_namespace["ALLOWED_FEATURE_COLUMNS"])
+    )
+    prediction_path, _, _ = _write_ml_champion_handoff_fixture(
+        tmp_path,
+        source_hash=source_hash,
+        split_hash=split_hash,
+        label_hash=label_hash,
+        feature_hash=feature_hash,
+        endpoint_count=2,
+    )
+    namespace = dl_tcn_namespace()
+    namespace["ML_CHAMPION_PREDICTION_BATCH_ROWS"] = 7
+    real_read_parquet = namespace["pd"].read_parquet
+
+    def forbid_prediction_full_read(
+        path: Any, *args: Any, **kwargs: Any
+    ) -> pd.DataFrame:
+        if Path(path) == prediction_path:
+            raise AssertionError("prediction Parquet must be streamed")
+        return real_read_parquet(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        namespace["pd"], "read_parquet", forbid_prediction_full_read
+    )
+
+    champion = namespace["discover_ml_champion_artifact"](
+        source_dataset_hash=source_hash,
+        split_hash=split_hash,
+        root=tmp_path,
+    )
+
+    assert champion.prediction_path == prediction_path
+
+
+@pytest.mark.parametrize(
+    ("duplicate_last_target", "coverage_hash"),
+    [
+        (True, None),
+        (False, "f" * 64),
+    ],
+)
+def test_ml_champion_stream_rejects_duplicate_or_coverage_mismatch(
+    tmp_path: Path,
+    duplicate_last_target: bool,
+    coverage_hash: str | None,
+) -> None:
+    source_hash = "a" * 64
+    split_hash = "b" * 64
+    sequence_namespace = dl_sequence_namespace()
+    label_hash, feature_hash = _handoff_schema_hashes(
+        tuple(sequence_namespace["ALLOWED_FEATURE_COLUMNS"])
+    )
+    _write_ml_champion_handoff_fixture(
+        tmp_path,
+        source_hash=source_hash,
+        split_hash=split_hash,
+        label_hash=label_hash,
+        feature_hash=feature_hash,
+        endpoint_count=2,
+        duplicate_last_target=duplicate_last_target,
+        endpoint_coverage_hash=coverage_hash,
+    )
+    namespace = dl_tcn_namespace()
+    namespace["ML_CHAMPION_PREDICTION_BATCH_ROWS"] = 16
+
+    with pytest.raises(ValueError, match="exactly one"):
+        namespace["discover_ml_champion_artifact"](
+            source_dataset_hash=source_hash,
+            split_hash=split_hash,
+            root=tmp_path,
+        )
+
+
+def test_ml_champion_stream_rejects_non_numeric_prediction_schema(
+    tmp_path: Path,
+) -> None:
+    source_hash = "a" * 64
+    split_hash = "b" * 64
+    sequence_namespace = dl_sequence_namespace()
+    label_hash, feature_hash = _handoff_schema_hashes(
+        tuple(sequence_namespace["ALLOWED_FEATURE_COLUMNS"])
+    )
+    prediction_path, _, manifest_path = _write_ml_champion_handoff_fixture(
+        tmp_path,
+        source_hash=source_hash,
+        split_hash=split_hash,
+        label_hash=label_hash,
+        feature_hash=feature_hash,
+    )
+    predictions = pd.read_parquet(prediction_path)
+    predictions["probability"] = predictions["probability"].astype(str)
+    predictions.to_parquet(prediction_path, index=False)
+    manifest = json.loads(manifest_path.read_text())
+    manifest["prediction_sha256"] = hashlib.sha256(
+        prediction_path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True))
+    namespace = dl_tcn_namespace()
+
+    with pytest.raises(ValueError, match="exactly one"):
+        namespace["discover_ml_champion_artifact"](
+            source_dataset_hash=source_hash,
+            split_hash=split_hash,
+            root=tmp_path,
+        )
+
+
+def test_ml_champion_metrics_reject_non_numeric_schema_below_size_cap(
+    tmp_path: Path,
+) -> None:
+    source_hash = "a" * 64
+    split_hash = "b" * 64
+    sequence_namespace = dl_sequence_namespace()
+    label_hash, feature_hash = _handoff_schema_hashes(
+        tuple(sequence_namespace["ALLOWED_FEATURE_COLUMNS"])
+    )
+    _, metrics_path, manifest_path = _write_ml_champion_handoff_fixture(
+        tmp_path,
+        source_hash=source_hash,
+        split_hash=split_hash,
+        label_hash=label_hash,
+        feature_hash=feature_hash,
+    )
+    metrics = pd.read_parquet(metrics_path)
+    metrics["value"] = metrics["value"].astype(str)
+    metrics.to_parquet(metrics_path, index=False)
+    manifest = json.loads(manifest_path.read_text())
+    manifest["metrics_sha256"] = hashlib.sha256(
+        metrics_path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True))
+    namespace = dl_tcn_namespace()
+
+    with pytest.raises(ValueError, match="exactly one"):
+        namespace["discover_ml_champion_artifact"](
+            source_dataset_hash=source_hash,
+            split_hash=split_hash,
+            root=tmp_path,
+        )
+
+
+def test_ml_champion_prediction_validator_has_bounded_endpoint_carry() -> None:
+    source, tree = _dl_tcn_ast()
+    validator = _named_definition(
+        tree, "_validate_ml_champion_prediction_stream"
+    )
+    validator_source = ast.get_source_segment(source, validator) or ""
+    calls = [
+        node
+        for node in ast.walk(validator)
+        if isinstance(node, ast.Call)
+    ]
+    iter_batch_calls = [
+        call
+        for call in calls
+        if isinstance(call.func, ast.Attribute)
+        and call.func.attr == "iter_batches"
+    ]
+
+    assert len(iter_batch_calls) == 1
+    assert {keyword.arg for keyword in iter_batch_calls[0].keywords} >= {
+        "batch_size",
+        "columns",
+    }
+    assert "ML_CHAMPION_PREDICTION_BATCH_ROWS" in validator_source
+    assert "current_endpoint" in validator_source
+    assert "current_targets" in validator_source
+    assert not any(
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "pd"
+        and call.func.attr == "read_parquet"
+        for call in calls
+    )
+    assert not any(
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and "endpoint" in call.func.value.id
+        and call.func.attr == "append"
+        for call in calls
+    )
 
 
 def test_final_handoff_manifest_name_and_korean_save_version_order_are_explicit() -> None:
