@@ -3201,3 +3201,276 @@ def test_train_sampler_cleanup_continues_after_writer_close_failure(
 
     assert not list(tmp_path.glob("goal15-train-sampling-*.sqlite"))
     assert not (tmp_path / "output.parquet").exists()
+
+
+def _dl_tcn_ast() -> tuple[str, ast.Module]:
+    path = KAGGLE_DIR / "04_dl_tcn_benchmark.ipynb"
+    notebook = load_notebooks()[path]
+    source = code_cell_source(notebook)
+    return source, ast.parse(source, filename=str(path))
+
+
+def _named_definition(tree: ast.Module, name: str) -> ast.FunctionDef | ast.ClassDef:
+    definitions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+    }
+    return definitions[name]
+
+
+def _called_names(node: ast.AST) -> list[str]:
+    names: list[str] = []
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        function = child.func
+        if isinstance(function, ast.Name):
+            names.append(function.id)
+        elif isinstance(function, ast.Attribute):
+            names.append(function.attr)
+    return names
+
+
+def test_dl_tcn_contract() -> None:
+    """Removing any required safe TCN entrypoint breaks the notebook contract."""
+    source, tree = _dl_tcn_ast()
+    expected_definitions = (
+        "verify_sequence_inputs",
+        "require_exactly_two_cuda_devices",
+        "setup_ddp",
+        "cleanup_ddp",
+        "CausalConvBlock",
+        "Goal15TCN",
+        "Goal15SequenceDataset",
+        "masked_multitask_loss",
+        "train_one_epoch",
+        "evaluate_common_schema",
+        "select_validation_threshold",
+        "compute_metrics_from_predictions",
+        "login_wandb_from_kaggle_secret",
+        "select_validation_champion",
+        "run_dl_training",
+    )
+    for definition in expected_definitions:
+        assert _named_definition(tree, definition)
+
+    assert "RUN_TRAINING = False" in source
+    assert "RUN_LOCKED_TEST = False" in source
+    assert 'PATTERN_TARGET = "pattern_binary"' in source
+    assert 'ONSET_EVENT_TARGET = "event_binary"' in source
+    assert 'SEQUENCE_OUTPUT_ROOT = Path("/kaggle/working/goal15_dl_sequences")' in source
+    assert source.count('UserSecretsClient().get_secret("WANDB_API_KEY")') == 1
+    assert source.count("WANDB_API_KEY") == 1
+
+
+def test_dl_tcn_verifies_sequence_hashes_schema_and_split_membership() -> None:
+    """A sampled, changed, or cross-split sequence input must fail before training."""
+    source, tree = _dl_tcn_ast()
+    verify = _named_definition(tree, "verify_sequence_inputs")
+    verify_source = ast.get_source_segment(source, verify) or ""
+
+    assert "sha256_file" in _called_names(verify)
+    assert "source_dataset_hash" in verify_source
+    assert "split_hash" in verify_source
+    assert "normalization" in verify_source
+    assert "ALLOWED_FEATURE_COLUMNS" in verify_source
+    assert "EXPECTED_SPLIT_COUNTS" in verify_source
+    assert "person leakage" in verify_source
+    assert "sampled" in verify_source
+    assert "full_causal_timeline" in verify_source
+    assert "row_count" in verify_source
+    assert "schema" in verify_source
+    index_verifier = ast.get_source_segment(
+        source, _named_definition(tree, "_verify_sequence_index")
+    ) or ""
+    assert "expected_length" in index_verifier
+    assert "eq(expected_length)" in index_verifier
+    assert "pattern and hard_negative cannot overlap" in index_verifier
+    assert "behavior-positive ordinary baseline" in index_verifier
+    assert "deterministic window_id mismatch" in index_verifier
+    assert "timezone-aware UTC" in index_verifier
+    assert "expected_feature_types" in verify_source
+
+
+def test_dl_tcn_architecture_is_causal_masked_and_within_parameter_budget() -> None:
+    """Symmetric padding, unmasked pooling, or a model outside 0.5-5M is rejected."""
+    source, tree = _dl_tcn_ast()
+    causal = _named_definition(tree, "CausalConvBlock")
+    model = _named_definition(tree, "Goal15TCN")
+    budget = _named_definition(tree, "assert_parameter_budget")
+    causal_source = ast.get_source_segment(source, causal) or ""
+    model_source = ast.get_source_segment(source, model) or ""
+    budget_source = ast.get_source_segment(source, budget) or ""
+
+    assert "F.pad" in causal_source
+    assert "(self.left_padding, 0)" in causal_source
+    assert "padding=0" in causal_source
+    assert "self.event_head = nn.Linear(hidden_size, 1)" in model_source
+    assert "self.stage_head = nn.Linear(hidden_size, 5)" in model_source
+    assert "self.behavior_head = nn.Linear(hidden_size, 10)" in model_source
+    assert "mask" in model_source
+    assert "sum" in model_source
+    assert "500_000" in budget_source
+    assert "5_000_000" in budget_source
+
+
+def test_dl_tcn_loss_uses_pattern_and_conditional_stage_behavior_masks() -> None:
+    """The onset-only audit label cannot replace the pattern target or decision masks."""
+    source, tree = _dl_tcn_ast()
+    loss = _named_definition(tree, "masked_multitask_loss")
+    loss_source = ast.get_source_segment(source, loss) or ""
+
+    assert "PATTERN_TARGET" in loss_source
+    assert "ONSET_EVENT_TARGET" not in loss_source
+    assert "stage_mask" in loss_source
+    assert "behavior_mask" in loss_source
+    assert "hard_negative" in loss_source
+    assert "behavior_positive" in loss_source
+    assert "binary_cross_entropy_with_logits" in loss_source
+    assert "cross_entropy" in loss_source
+
+
+def test_dl_tcn_dataset_is_lazy_bounded_and_train_normalized() -> None:
+    """Dataset construction cannot load full timelines or fit normalization on eval roles."""
+    source, tree = _dl_tcn_ast()
+    dataset = _named_definition(tree, "Goal15SequenceDataset")
+    dataset_source = ast.get_source_segment(source, dataset) or ""
+
+    assert "pq.ParquetFile" in dataset_source
+    assert "read_row_group" in dataset_source
+    assert "pd.read_parquet" not in dataset_source
+    assert "fit_split_role" in dataset_source
+    assert "'train'" in dataset_source
+    assert "ALLOWED_FEATURE_COLUMNS" in dataset_source
+    assert "window_start" in dataset_source
+    assert "window_end" in dataset_source
+
+
+def test_dl_tcn_gpu_gate_precedes_ddp_wandb_and_data_construction() -> None:
+    """A non-T4x2 runtime must fail before DDP, W&B, loaders, or training exist."""
+    source, tree = _dl_tcn_ast()
+    gate = _named_definition(tree, "require_exactly_two_cuda_devices")
+    gate_source = ast.get_source_segment(source, gate) or ""
+    runner = _named_definition(tree, "run_dl_training")
+    calls = _called_names(runner)
+
+    assert "device_count" in gate_source
+    assert "!= 2" in gate_source
+    assert "raise RuntimeError" in gate_source
+    gate_index = calls.index("require_exactly_two_cuda_devices")
+    for later_call in (
+        "setup_ddp",
+        "login_wandb_from_kaggle_secret",
+        "Goal15SequenceDataset",
+        "DataLoader",
+        "train_one_epoch",
+    ):
+        assert gate_index < calls.index(later_call)
+
+
+def test_dl_tcn_uses_torchrun_ddp_amp_and_deterministic_sampler() -> None:
+    """Dropping one-process-per-GPU DDP or epoch-aware sampling is unsafe."""
+    source, tree = _dl_tcn_ast()
+    setup_source = ast.get_source_segment(
+        source, _named_definition(tree, "setup_ddp")
+    ) or ""
+    train_source = ast.get_source_segment(
+        source, _named_definition(tree, "train_one_epoch")
+    ) or ""
+    runner_source = ast.get_source_segment(
+        source, _named_definition(tree, "run_dl_training")
+    ) or ""
+
+    assert all(name in setup_source for name in ("LOCAL_RANK", "RANK", "WORLD_SIZE", "nccl"))
+    assert "DistributedDataParallel" in runner_source
+    assert "DistributedSampler" in runner_source
+    assert "set_epoch" in runner_source
+    assert "autocast" in train_source
+    assert "GradScaler" in runner_source
+    assert "clip_grad_norm_" in train_source
+    assert "rank == 0" in runner_source
+
+
+def test_dl_tcn_training_entrypoint_is_only_under_explicit_guard() -> None:
+    """Importing or opening the notebook must never start training."""
+    _, tree = _dl_tcn_ast()
+    top_level_runner_calls = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "run_dl_training"
+    ]
+    assert not top_level_runner_calls
+
+    guarded = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.If)
+        and any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "run_dl_training"
+            for statement in node.body
+            for call in ast.walk(statement)
+        )
+    ]
+    assert len(guarded) == 1
+    assert "RUN_TRAINING" in ast.unparse(guarded[0].test)
+
+
+def test_dl_tcn_common_outputs_and_selection_are_validation_only() -> None:
+    """Locked-test rows cannot choose the DL champion or enter ML/DL comparison."""
+    source, tree = _dl_tcn_ast()
+    evaluation = ast.get_source_segment(
+        source, _named_definition(tree, "evaluate_common_schema")
+    ) or ""
+    binary_metrics = ast.get_source_segment(
+        source, _named_definition(tree, "_binary_metric_rows")
+    ) or ""
+    selection = ast.get_source_segment(
+        source, _named_definition(tree, "select_validation_champion")
+    ) or ""
+    comparison = ast.get_source_segment(
+        source, _named_definition(tree, "write_validation_model_comparison")
+    ) or ""
+    aggregate_metrics = ast.get_source_segment(
+        source, _named_definition(tree, "compute_metrics_from_predictions")
+    ) or ""
+    runner = ast.get_source_segment(
+        source, _named_definition(tree, "run_dl_training")
+    ) or ""
+
+    assert "PREDICTION_COLUMNS" in evaluation
+    assert "METRIC_COLUMNS" in aggregate_metrics
+    assert all(metric in binary_metrics for metric in (
+        "aucpr",
+        "auroc",
+        "event_recall",
+        "false_alerts_per_hour",
+        "brier_score",
+        "ece",
+        "person_macro",
+    ))
+    assert "validation" in selection
+    assert "locked_test" in selection
+    assert all(metric in selection for metric in (
+        "aucpr",
+        "event_recall",
+        "false_alerts_per_hour",
+        "ece",
+    ))
+    assert "validation" in comparison
+    assert "locked_test" in comparison
+    assert "on=['target', 'metric']" in comparison
+    assert all(metric in aggregate_metrics for metric in (
+        "stage_macro_f1",
+        "stage_balanced_accuracy",
+        "behavior_micro_aucpr",
+        "behavior_macro_aucpr",
+    ))
+    assert "select_validation_threshold" in runner
+    assert "drop_duplicates" in runner
+    assert "compute_metrics_from_predictions" in runner
