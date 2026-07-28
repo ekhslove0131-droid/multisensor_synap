@@ -1722,6 +1722,141 @@ def test_sequence_build_handles_empty_first_chunk_before_later_window(
     assert emitted.schema.equals(namespace["sequence_index_arrow_schema"]())
 
 
+def test_tail_preserves_endpoint_before_later_missing_block_across_row_group_layout() -> None:
+    namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    rows = []
+    for second in range(5):
+        row = _strict_sequence_frame(namespace).iloc[0].to_dict()
+        row["canonical_time"] = start + pd.Timedelta(seconds=second)
+        row["missing_block"] = second == 3
+        rows.append(row)
+    full = pd.DataFrame(rows)
+
+    single_layout = namespace["make_causal_window_index"](full, length_seconds=3)
+    split_layout = namespace["_index_current_chunk"](
+        full.iloc[:2].copy(), full.iloc[2:].copy(), length_seconds=3
+    )
+
+    assert list(single_layout["prediction_time"]) == [start + pd.Timedelta(seconds=2)]
+    assert split_layout["window_id"].tolist() == single_layout["window_id"].tolist()
+
+
+def test_role_chunk_iterator_rejects_noncontiguous_identity_reappearance(tmp_path: Path) -> None:
+    namespace = dl_sequence_namespace()
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    groups = []
+    for person_key, second in (("P1", 0), ("P2", 0), ("P1", 1)):
+        frame = _strict_sequence_frame(namespace)
+        frame["person_key"] = person_key
+        frame["canonical_time"] = start + pd.Timedelta(seconds=second)
+        groups.append(frame)
+    path = tmp_path / "train.parquet"
+    schema = namespace["pa"].Table.from_pandas(groups[0], preserve_index=False).schema
+    writer = namespace["pq"].ParquetWriter(path, schema, compression="zstd")
+    try:
+        for group in groups:
+            table = namespace["pa"].Table.from_pandas(
+                group, schema=schema, preserve_index=False
+            )
+            writer.write_table(table)
+    finally:
+        writer.close()
+
+    with pytest.raises(ValueError, match="contiguous"):
+        list(namespace["_iter_role_person_chunks"](path, "train"))
+
+
+def _write_row_grouped_sequence_views(
+    root: Path,
+    namespace: dict[str, Any],
+    source_hash: str,
+    split_hash: str,
+    train_groups: list[pd.DataFrame],
+) -> None:
+    _write_strict_ml_views(root, namespace, source_hash, split_hash)
+    train_path = root / "train.parquet"
+    schema = namespace["pa"].Table.from_pandas(train_groups[0], preserve_index=False).schema
+    writer = namespace["pq"].ParquetWriter(train_path, schema, compression="zstd")
+    try:
+        for group in train_groups:
+            table = namespace["pa"].Table.from_pandas(
+                group, schema=schema, preserve_index=False
+            )
+            writer.write_table(table)
+    finally:
+        writer.close()
+    manifest_path = root / "view_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["train"]["sha256"] = hashlib.sha256(train_path.read_bytes()).hexdigest()
+    manifest["files"]["train"]["row_count"] = sum(len(group) for group in train_groups)
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def test_sequence_build_is_row_group_layout_invariant_for_global_train_sampling(
+    tmp_path: Path,
+) -> None:
+    namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    timeline_rows = []
+    for second in range(17):
+        row = _strict_sequence_frame(namespace).iloc[0].to_dict()
+        row["person_key"] = "train-00"
+        row["canonical_time"] = start + pd.Timedelta(seconds=second)
+        if second in {3, 6, 9, 12}:
+            row["pattern_binary"] = 1
+            row["stage_code"] = "LOW"
+        timeline_rows.append(row)
+    timeline = pd.DataFrame(timeline_rows)
+    membership_groups = []
+    for index in range(1, 24):
+        row = _strict_sequence_frame(namespace)
+        row["person_key"] = f"train-{index:02d}"
+        membership_groups.append(row)
+
+    whole_root = tmp_path / "whole"
+    split_root = tmp_path / "split"
+    whole_root.mkdir()
+    split_root.mkdir()
+    _write_row_grouped_sequence_views(
+        whole_root, namespace, source_hash, split_hash, [timeline, *membership_groups]
+    )
+    _write_row_grouped_sequence_views(
+        split_root,
+        namespace,
+        source_hash,
+        split_hash,
+        [
+            timeline.iloc[:4],
+            timeline.iloc[4:7],
+            timeline.iloc[7:10],
+            timeline.iloc[10:13],
+            timeline.iloc[13:],
+            *membership_groups,
+        ],
+    )
+
+    whole_output = tmp_path / "whole-output"
+    split_output = tmp_path / "split-output"
+    namespace["build_all_sequence_indexes"](
+        flat_dataset_root=flat_root, ml_view_root=whole_root, output_root=whole_output
+    )
+    namespace["build_all_sequence_indexes"](
+        flat_dataset_root=flat_root, ml_view_root=split_root, output_root=split_output
+    )
+
+    whole = namespace["pq"].read_table(whole_output / "train_3.parquet").to_pandas()
+    split = namespace["pq"].read_table(split_output / "train_3.parquet").to_pandas()
+    assert len(whole) == 15
+    assert whole.sort_values("window_id").reset_index(drop=True).equals(
+        split.sort_values("window_id").reset_index(drop=True)
+    )
+
+
 def test_verified_role_views_reject_cross_role_feature_type_mismatch(tmp_path: Path) -> None:
     namespace = dl_sequence_namespace()
     flat_root = tmp_path / "flat"
