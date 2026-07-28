@@ -4917,3 +4917,202 @@ def test_round7_segment_state_rejects_missing_identity_and_naive_time() -> None:
         state = namespace["SegmentEventGridState"](bins=101)
         with pytest.raises(ValueError):
             state.update_row(broken, truth=0, probability=0.1)
+
+
+def test_round8_canonical_endpoint_order_is_time_first_across_streams(
+    tmp_path: Path,
+) -> None:
+    """Session text is identity, never a sort key ahead of physical time."""
+    source, tree = _dl_tcn_ast()
+    prediction_iterator = ast.get_source_segment(
+        source, _named_definition(tree, "iter_window_major_prediction_groups")
+    ) or ""
+    expected_iterator = ast.get_source_segment(
+        source, _named_definition(tree, "iter_expected_sequence_windows")
+    ) or ""
+    group_key = ast.get_source_segment(
+        source, _named_definition(tree, "_window_group_key")
+    ) or ""
+    merge = ast.get_source_segment(
+        source, _named_definition(tree, "merge_window_major_shards")
+    ) or ""
+    ml_iterator = ast.get_source_segment(
+        source, _named_definition(tree, "iter_ml_prediction_endpoint_groups")
+    ) or ""
+    sequence_columns = {
+        "person_key", "run_id", "dataset_id", "day_key", "session_id",
+        "prediction_time", "window_id",
+    }
+    namespace = {
+        "Any": Any,
+        "Path": Path,
+        "Sequence": list,
+        "pd": pd,
+        "pq": pq,
+        "SEQUENCE_INDEX_COLUMNS": sequence_columns,
+    }
+    exec(
+        prediction_iterator + "\n" + expected_iterator + "\n"
+        + group_key + "\n" + merge + "\n" + ml_iterator,
+        namespace,
+    )
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+
+    def prediction_row(
+        second: int, session_id: str, window_id: str
+    ) -> dict[str, Any]:
+        return {
+            "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "day_key": "2026-01-01", "session_id": session_id,
+            "canonical_time": start + pd.Timedelta(seconds=second),
+            "window_id": window_id, "target": "pattern_binary",
+        }
+
+    chronological = [
+        prediction_row(0, "session-2", "window-0"),
+        prediction_row(1, "session-10", "window-1"),
+    ]
+    prediction_path = tmp_path / "prediction.parquet"
+    pq.write_table(pa.Table.from_pylist(chronological), prediction_path)
+    groups = list(namespace["iter_window_major_prediction_groups"](prediction_path))
+    assert [group["session_id"].iloc[0] for group in groups] == [
+        "session-2", "session-10",
+    ]
+
+    earlier_path = tmp_path / "earlier.parquet"
+    later_path = tmp_path / "later.parquet"
+    pq.write_table(pa.Table.from_pylist([chronological[0]]), earlier_path)
+    pq.write_table(pa.Table.from_pylist([chronological[1]]), later_path)
+    merged = list(
+        namespace["merge_window_major_shards"]([later_path, earlier_path])
+    )
+    assert [pd.Timestamp(group["canonical_time"].iloc[0]) for group in merged] == [
+        start, start + pd.Timedelta(seconds=1),
+    ]
+
+    expected_path = tmp_path / "expected.parquet"
+    expected_rows = [
+        {
+            key: value
+            for key, value in {
+                **row,
+                "prediction_time": row["canonical_time"],
+            }.items()
+            if key in sequence_columns
+        }
+        for row in chronological
+    ]
+    pq.write_table(pa.Table.from_pylist(expected_rows), expected_path)
+    expected = list(namespace["iter_expected_sequence_windows"](expected_path))
+    assert [row["session_id"] for row in expected] == ["session-2", "session-10"]
+    reverse_expected_path = tmp_path / "reverse-expected.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(expected_rows[::-1]), reverse_expected_path
+    )
+    with pytest.raises(ValueError, match="not canonical"):
+        list(namespace["iter_expected_sequence_windows"](reverse_expected_path))
+
+    def ml_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "model_family": "machine_learning", "model_name": "ml",
+            "series_id": "mvp3-oracle-v1", "dataset_id": row["dataset_id"],
+            "run_id": row["run_id"], "person_key": row["person_key"],
+            "day_key": row["day_key"], "session_id": row["session_id"],
+            "canonical_time": row["canonical_time"], "split_role": "validation",
+            "target": "pattern_binary", "label": 0, "probability": 0.1,
+            "threshold": 0.5, "target_model_id": "pattern-model",
+        }
+
+    ml_path = tmp_path / "ml.parquet"
+    pq.write_table(
+        pa.Table.from_pylist([ml_row(row) for row in chronological]), ml_path
+    )
+    ml_groups = list(namespace["iter_ml_prediction_endpoint_groups"](ml_path))
+    assert [group["session_id"].iloc[0] for group in ml_groups] == [
+        "session-2", "session-10",
+    ]
+    reverse_ml_path = tmp_path / "reverse-ml.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [ml_row(row) for row in chronological[::-1]]
+        ),
+        reverse_ml_path,
+    )
+    with pytest.raises(ValueError, match="not endpoint-major sorted"):
+        list(namespace["iter_ml_prediction_endpoint_groups"](reverse_ml_path))
+
+    reverse_path = tmp_path / "reverse.parquet"
+    pq.write_table(pa.Table.from_pylist(chronological[::-1]), reverse_path)
+    with pytest.raises(ValueError, match="not canonical"):
+        list(namespace["iter_window_major_prediction_groups"](reverse_path))
+
+    conflicting = [
+        chronological[0],
+        {
+            **chronological[0],
+            "session_id": "session-10",
+            "target": "stage::LOW",
+        },
+    ]
+    conflicting_path = tmp_path / "conflicting-segment.parquet"
+    pq.write_table(pa.Table.from_pylist(conflicting), conflicting_path)
+    with pytest.raises(ValueError, match="conflicting segment identity"):
+        list(namespace["iter_window_major_prediction_groups"](conflicting_path))
+
+
+def test_round8_ml_comparison_path_preserves_and_validates_segment_identity(
+    tmp_path: Path,
+) -> None:
+    """The executable ML endpoint path carries exact day/session into semantics."""
+    source, tree = _dl_tcn_ast()
+    definitions = "\n".join(
+        ast.get_source_segment(source, _named_definition(tree, name)) or ""
+        for name in (
+            "_validate_public_evaluation_identity",
+            "iter_ml_prediction_endpoint_groups",
+            "validate_window_group_semantics",
+        )
+    )
+    namespace = {
+        "Any": Any,
+        "Mapping": dict,
+        "Path": Path,
+        "pd": pd,
+        "pq": pq,
+        "PATTERN_TARGET": "pattern_binary",
+        "ONSET_EVENT_TARGET": "event_binary",
+        "STAGE_TARGET": "stage_code",
+        "STAGE_CODES": ("LOW", "MEDIUM", "HIGH", "DECREASING", "RECOVERY"),
+        "BEHAVIOR_CODES": BEHAVIOR_CODES,
+    }
+    exec(definitions, namespace)
+    timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    row = {
+        "model_family": "machine_learning", "model_name": "ml",
+        "series_id": "mvp3-oracle-v1", "dataset_id": "d1", "run_id": "r1",
+        "person_key": "p1", "day_key": "2026-01-01", "session_id": "session-2",
+        "canonical_time": timestamp, "split_role": "validation",
+        "target": "pattern_binary", "label": 0, "probability": 0.1,
+        "threshold": 0.5, "target_model_id": "pattern-model",
+    }
+    prediction_path = tmp_path / "ml-champion.parquet"
+    pq.write_table(pa.Table.from_pylist([row]), prediction_path)
+    group = next(namespace["iter_ml_prediction_endpoint_groups"](prediction_path))
+    assert group["day_key"].tolist() == ["2026-01-01"]
+    assert group["session_id"].tolist() == ["session-2"]
+    group["window_id"] = "window-0"
+    group["audit_event_binary"] = 0
+    expected = {
+        "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+        "day_key": "2026-01-01", "session_id": "session-2",
+        "prediction_time": timestamp, "window_id": "window-0",
+        "split_role": "validation", "pattern_binary": 0, "event_binary": 0,
+        "hard_negative": 0, "stage_code": "NO_EVENT",
+        **{code: 0 for code in BEHAVIOR_CODES},
+    }
+    namespace["validate_window_group_semantics"](group, expected)
+
+    mismatched = group.copy()
+    mismatched["session_id"] = "session-10"
+    with pytest.raises(ValueError, match="exact identity mismatch"):
+        namespace["validate_window_group_semantics"](mismatched, expected)
