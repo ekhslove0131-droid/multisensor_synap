@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -618,6 +619,63 @@ def test_write_ml_view_manifest_uses_bounded_metadata_without_reading_role_outpu
         assert manifest["files"][role]["row_count"] == row_counts[role]
         assert manifest["files"][role]["columns"] == role_columns[role]
         assert manifest["files"][role]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_dl_timeline_manifest_carries_exact_physical_source_groups(
+    tmp_path: Path,
+) -> None:
+    """The DL manifest must preserve person/run/dataset/split row-count proof."""
+    namespace = ml_data_namespace()
+    view_path = tmp_path / "train.parquet"
+    view_path.write_bytes(b"sampled ML rows")
+    source_group = {
+        "person_key": "train-00",
+        "run_id": "run-1",
+        "dataset_id": "source-train-00",
+        "split_role": "train",
+        "row_count": 1,
+    }
+    timeline = pd.DataFrame(
+        {
+            "person_key": ["train-00"],
+            "run_id": ["run-1"],
+            "dataset_id": ["source-train-00"],
+            "split_role": ["train"],
+            **{feature: [0.0] for feature in namespace["DL_CAUSAL_FEATURE_COLUMNS"]},
+        }
+    )
+    timeline_path = tmp_path / "dl_timeline_train.parquet"
+    timeline.to_parquet(timeline_path, index=False)
+    source_inventory = [
+        {
+            **source_group,
+            "person_id": "train-00",
+            "path": "prepared__people__source-train-00.parquet",
+            "sha256": "c" * 64,
+            "schema_fingerprint": "d" * 64,
+        }
+    ]
+    inventory_hash = hashlib.sha256(
+        json.dumps(source_inventory, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    manifest_path = namespace["write_ml_view_manifest"](
+        tmp_path,
+        {"train": view_path},
+        "a" * 64,
+        "b" * 64,
+        {"train": 1},
+        {"train": ["person_key"]},
+        {"train": timeline_path},
+        {"train": 1},
+        {"train": list(timeline.columns)},
+        {"train": {"source-train-00"}},
+        source_inventory,
+        inventory_hash,
+    )
+
+    metadata = json.loads(manifest_path.read_text())["dl_timeline_files"]["train"]
+    assert metadata["source_groups"] == [source_group]
 
 
 @pytest.mark.parametrize("required_file", ["outcome_stages.parquet", "outcome_behaviors.parquet"])
@@ -1350,7 +1408,7 @@ def test_make_causal_window_index_rejects_boundary_and_missing_block_crossings()
     namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
     frame = _sequence_source_frame()
     frame.loc[2, "missing_block"] = True
-    frame.loc[6, "session_id"] = "session-2"
+    frame.loc[6:, "session_id"] = "session-2"
 
     index = namespace["make_causal_window_index"](frame, length_seconds=3)
 
@@ -1548,6 +1606,13 @@ def _write_flat_identity_fixture(
         inventory.append(
             {
                 **person,
+                "split_role": (
+                    "train"
+                    if person["person_key"].startswith("train-")
+                    else "validation"
+                    if person["person_key"].startswith("validation-")
+                    else "locked_test"
+                ),
                 "path": path.name,
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 "row_count": parquet.metadata.num_rows,
@@ -1706,14 +1771,34 @@ def _write_strict_ml_views(
             "columns": list(role_frame.columns),
         }
     full_files = {}
+    inventory = _FLAT_SOURCE_INVENTORIES[source_hash][0]
     for role, metadata in files.items():
         frame = pd.read_parquet(root / metadata["path"], columns=["dataset_id"])
+        source_groups = sorted(
+            [
+                {
+                    "person_key": item["person_key"],
+                    "run_id": item["run_id"],
+                    "dataset_id": item["dataset_id"],
+                    "split_role": item["split_role"],
+                    "row_count": item["row_count"],
+                }
+                for item in inventory
+                if item["split_role"] == role
+            ],
+            key=lambda item: (
+                item["person_key"],
+                item["run_id"],
+                item["dataset_id"],
+            ),
+        )
         full_files[role] = {
             **metadata,
             "feature_columns": list(namespace["ALLOWED_FEATURE_COLUMNS"]),
             "dataset_ids": sorted(frame["dataset_id"].unique()),
             "view_kind": "full_causal_timeline",
             "sampled": False,
+            "source_groups": source_groups,
         }
     manifest = {
         "series_id": "mvp3-oracle-v1",
@@ -2076,7 +2161,7 @@ def test_row_group_tail_emits_one_600_second_endpoint_without_crossing_boundary(
     assert len(index) == 1
     assert index.loc[0, "window_start"] == start
     assert index.loc[0, "window_end"] == start + pd.Timedelta(seconds=599)
-    second.loc[0, "canonical_time"] = start + pd.Timedelta(seconds=601)
+    second["canonical_time"] = second["canonical_time"] + pd.Timedelta(seconds=301)
     broken = namespace["_index_current_chunk"](tail, second, length_seconds=600)
     assert broken.empty
 
@@ -2253,6 +2338,9 @@ def _write_dual_view_fixture(
             "dataset_ids": sorted(frame["dataset_id"].unique()),
             "view_kind": "full_causal_timeline",
             "sampled": False,
+            "source_groups": manifest["dl_timeline_files"][role][
+                "source_groups"
+            ],
         }
     train_path = root / "dl_timeline_train.parquet"
     schema = namespace["pa"].Table.from_pandas(train_groups[0], preserve_index=False).schema
@@ -2277,6 +2365,24 @@ def _write_dual_view_fixture(
         ),
         "view_kind": "full_causal_timeline",
         "sampled": False,
+        "source_groups": sorted(
+            [
+                {
+                    "person_key": item["person_key"],
+                    "run_id": item["run_id"],
+                    "dataset_id": item["dataset_id"],
+                    "split_role": item["split_role"],
+                    "row_count": item["row_count"],
+                }
+                for item in manifest["source_content_inventory"]
+                if item["split_role"] == "train"
+            ],
+            key=lambda item: (
+                item["person_key"],
+                item["run_id"],
+                item["dataset_id"],
+            ),
+        ),
     }
     manifest["files"]["train"]["view_kind"] = "sampled_ml_rows"
     manifest["files"]["train"]["sampled"] = True
@@ -2402,9 +2508,12 @@ def test_source_dataset_identity_binds_physical_prepared_parquet_bytes(
         "registry__manifest.json": "c" * 64,
     }
     split_path = tmp_path / "registry__splits.parquet"
-    pd.DataFrame({"person_key": ["train-00"], "split_role": ["train"]}).to_parquet(
-        split_path, index=False
-    )
+    pd.DataFrame(
+        {
+            "person_key": ["train-00", "validation-00", "locked-00"],
+            "split_role": ["train", "validation", "locked_test"],
+        }
+    ).to_parquet(split_path, index=False)
 
     first_hash, first_inventory, first_inventory_hash = namespace[
         "derive_source_dataset_identity"
@@ -2437,9 +2546,12 @@ def test_source_dataset_identity_changes_for_row_count_and_schema_mutation(
         "outcomes__manifest.json": "b" * 64,
         "registry__manifest.json": "c" * 64,
     }
-    pd.DataFrame({"person_key": ["train-00"], "split_role": ["train"]}).to_parquet(
-        tmp_path / "registry__splits.parquet", index=False
-    )
+    pd.DataFrame(
+        {
+            "person_key": ["train-00", "validation-00", "locked-00"],
+            "split_role": ["train", "validation", "locked_test"],
+        }
+    ).to_parquet(tmp_path / "registry__splits.parquet", index=False)
     original_hash, original_inventory, _ = namespace["derive_source_dataset_identity"](
         tmp_path, manifest_hashes, people
     )
@@ -2459,6 +2571,35 @@ def test_source_dataset_identity_changes_for_row_count_and_schema_mutation(
     assert changed_inventory[0]["schema_fingerprint"] != original_inventory[0][
         "schema_fingerprint"
     ]
+
+
+def test_source_inventory_rejects_manifest_run_id_that_differs_from_physical_rows(
+    tmp_path: Path,
+) -> None:
+    """A logical registry run_id cannot override physical prepared row identity."""
+    namespace = ml_data_namespace()
+    people = _write_physical_prepared_fixture(tmp_path)
+    pd.DataFrame(
+        {
+            "person_key": ["train-00", "validation-00", "locked-00"],
+            "split_role": ["train", "validation", "locked_test"],
+        }
+    ).to_parquet(tmp_path / "registry__splits.parquet", index=False)
+    path = tmp_path / "prepared__people__source-0.parquet"
+    changed = pd.read_parquet(path)
+    changed["run_id"] = "physical-other-run"
+    changed.to_parquet(path, index=False)
+
+    with pytest.raises(ValueError, match=r"physical|run_id|identity"):
+        namespace["derive_source_dataset_identity"](
+            tmp_path,
+            {
+                "prepared__manifest.json": "a" * 64,
+                "outcomes__manifest.json": "b" * 64,
+                "registry__manifest.json": "c" * 64,
+            },
+            people,
+        )
 
 
 def test_verified_full_timeline_rejects_physical_row_count_mismatch(
@@ -2507,6 +2648,35 @@ def test_verified_full_timeline_rejects_source_binding_swap(
         namespace["_verified_role_views"](views_root, flat_root)
 
 
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [("run_id", "forged-run"), ("split_role", "validation")],
+)
+def test_verified_full_timeline_rejects_run_or_split_mutation(
+    tmp_path: Path, column: str, value: str
+) -> None:
+    """Updating only timeline bytes/manifest cannot forge run or split provenance."""
+    namespace = dl_sequence_namespace()
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    views_root = tmp_path / "views"
+    views_root.mkdir()
+    _write_strict_ml_views(views_root, namespace, source_hash, split_hash)
+    manifest_path = views_root / "view_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    train_path = views_root / manifest["dl_timeline_files"]["train"]["path"]
+    train = pd.read_parquet(train_path)
+    train.loc[0, column] = value
+    train.to_parquet(train_path, index=False, row_group_size=1)
+    manifest["dl_timeline_files"]["train"]["sha256"] = hashlib.sha256(
+        train_path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match=r"binding|split"):
+        namespace["_verified_role_views"](views_root, flat_root)
+
+
 def test_make_causal_window_index_is_vectorized_and_matches_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2515,11 +2685,23 @@ def test_make_causal_window_index_is_vectorized_and_matches_reference(
     namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
     frame = _sequence_source_frame()
     frame.loc[2, "missing_block"] = True
-    expected_times = {
-        frame.loc[5, "canonical_time"],
-        frame.loc[6, "canonical_time"],
-        frame.loc[7, "canonical_time"],
-    }
+    group_keys = namespace["_window_group_keys"](frame)
+    expected_times: set[pd.Timestamp] = set()
+    run_length = 0
+    previous: pd.Series | None = None
+    for _, row in frame.iterrows():
+        missing = bool(row["missing_block"])
+        contiguous = (
+            previous is not None
+            and not bool(previous["missing_block"])
+            and all(row[key] == previous[key] for key in group_keys)
+            and row["canonical_time"] - previous["canonical_time"]
+            == pd.Timedelta(seconds=1)
+        )
+        run_length = 0 if missing else run_length + 1 if contiguous else 1
+        if run_length >= 3:
+            expected_times.add(row["canonical_time"])
+        previous = row
 
     def reject_series_diff(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("endpoint window scans must not call Series.diff")
@@ -2528,6 +2710,43 @@ def test_make_causal_window_index_is_vectorized_and_matches_reference(
     index = namespace["make_causal_window_index"](frame, length_seconds=3)
 
     assert set(index["prediction_time"]) == expected_times
+
+
+def test_make_causal_window_index_has_no_sorting_calls() -> None:
+    """Reintroducing O(N log N) sorting inside causal indexing must fail."""
+    notebook = load_notebooks()[KAGGLE_DIR / "03_dl_sequence_data.ipynb"]
+    tree = ast.parse(code_cell_source(notebook))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "make_causal_window_index"
+    )
+    forbidden = []
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {
+            "sort_values",
+            "argsort",
+        }:
+            forbidden.append(node.func.attr)
+        if isinstance(node.func, ast.Name) and node.func.id == "sorted":
+            forbidden.append(node.func.id)
+    assert forbidden == []
+
+
+def test_make_causal_window_index_rejects_unsorted_input() -> None:
+    """Input order is part of the bounded streaming contract and cannot be repaired."""
+    namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
+    frame = _sequence_source_frame()
+    frame.loc[[0, 1], "canonical_time"] = frame.loc[
+        [1, 0], "canonical_time"
+    ].to_numpy()
+
+    with pytest.raises(ValueError, match=r"ordered|monotonic"):
+        namespace["make_causal_window_index"](frame, length_seconds=3)
 
 
 def test_train_sampler_removes_sqlite_when_connect_fails(
