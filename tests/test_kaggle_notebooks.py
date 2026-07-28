@@ -769,7 +769,14 @@ def _write_ml_view_fixture(root: Path) -> None:
             is_pattern = index % 6 != 0
             row: dict[str, Any] = {
                 "person_key": f"person-{index:02d}",
-                "canonical_time": index,
+                "run_id": "run-1",
+                "dataset_id": f"dataset-{index:02d}",
+                "day_key": "2026-01-01",
+                "session_id": f"session-{index:02d}",
+                "canonical_time": (
+                    pd.Timestamp("2026-01-01T00:00:00Z")
+                    + pd.Timedelta(seconds=index)
+                ),
                 "autonomic_arousal__robust_z": float(index % 5),
                 "motor_activation__mean_5s": float(index // 3),
                 "pattern_binary": int(is_pattern),
@@ -1208,7 +1215,13 @@ def test_prediction_rows_apply_target_specific_decision_masks() -> None:
     frame = pd.DataFrame(
         {
             "person_key": ["P1"] * 4,
-            "canonical_time": [0, 1, 2, 3],
+            "run_id": ["run-1"] * 4,
+            "dataset_id": ["dataset-1"] * 4,
+            "day_key": ["2026-01-01"] * 4,
+            "session_id": ["session-1"] * 4,
+            "canonical_time": pd.date_range(
+                "2026-01-01", periods=4, freq="s", tz="UTC"
+            ),
             "autonomic_arousal__robust_z": [0.1, 0.2, 0.3, 0.4],
             "pattern_binary": [1, 0, 0, 0],
             "event_binary": [0, 1, 0, 0],
@@ -1293,7 +1306,9 @@ def test_validation_helpers_do_not_select_locked_test_metrics() -> None:
     truth = pd.Series([0, 0, 1, 1, 0, 0], dtype="int8")
     probability = pd.Series([0.1, 0.2, 0.9, 0.8, 0.7, 0.1], dtype="float64")
     people = np.array(["P1"] * 6)
-    canonical_time = np.arange(6)
+    canonical_time = pd.date_range(
+        "2026-01-01", periods=6, freq="s", tz="UTC"
+    ).to_numpy()
     threshold = namespace["select_validation_threshold"](
         truth.to_numpy(),
         probability.to_numpy(),
@@ -1422,11 +1437,11 @@ def test_make_causal_window_index_rejects_boundary_and_missing_block_crossings()
     ).all()
 
 
-def test_make_causal_window_index_honors_declared_date_boundaries() -> None:
+def test_make_causal_window_index_honors_public_day_key_boundaries() -> None:
     namespace = dl_sequence_namespace()
     namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
-    frame = _sequence_source_frame().drop(columns="day_key")
-    frame["date"] = ["2026-01-01"] * 3 + ["2026-01-02"] * 5
+    frame = _sequence_source_frame()
+    frame["day_key"] = ["2026-01-01"] * 3 + ["2026-01-02"] * 5
 
     index = namespace["make_causal_window_index"](frame, length_seconds=3)
 
@@ -1667,6 +1682,8 @@ def _strict_sequence_frame(namespace: dict[str, Any]) -> pd.DataFrame:
         "person_key": "P1",
         "run_id": "run-1",
         "dataset_id": "dataset-1",
+        "day_key": "2026-01-01",
+        "session_id": "session-1",
         "canonical_time": pd.Timestamp("2026-01-01T00:00:00Z"),
         "split_role": "train",
         "context": "focused_task",
@@ -4024,6 +4041,8 @@ def test_round4_window_major_iterators_bound_carry_and_stream_expected_rows(
                     "person_key": "person-a",
                     "run_id": "run-a",
                     "dataset_id": "dataset-a",
+                    "day_key": "2026-01-01",
+                    "session_id": "session-a",
                     "canonical_time": pd.Timestamp(
                         "2026-01-01", tz="UTC"
                     ) + pd.Timedelta(seconds=window),
@@ -4328,6 +4347,9 @@ def test_round5_ml_dl_event_alert_runs_have_identical_overlap_semantics() -> Non
     ml_segment_state = ast.get_source_segment(
         ml_source, _named_definition(ml_tree, "SegmentEventGridState")
     ) or ""
+    ml_internal_identity = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "_internal_metric_segment_identity")
+    ) or ""
     ml_select = ast.get_source_segment(
         ml_source, _named_definition(ml_tree, "select_validation_threshold")
     ) or ""
@@ -4347,8 +4369,8 @@ def test_round5_ml_dl_event_alert_runs_have_identical_overlap_semantics() -> Non
         "COMMON_THRESHOLD_GRID_SIZE": 101,
     }
     exec(
-        ml_segments + "\n" + ml_segment_state + "\n" + ml_event + "\n"
-        + ml_select,
+        ml_segments + "\n" + ml_segment_state + "\n" + ml_internal_identity
+        + "\n" + ml_event + "\n" + ml_select,
         namespace,
     )
     exec(dl_event + "\n" + dl_select, namespace)
@@ -4357,6 +4379,10 @@ def test_round5_ml_dl_event_alert_runs_have_identical_overlap_semantics() -> Non
     times = pd.date_range("2026-01-01", periods=4, freq="s", tz="UTC")
     frame = pd.DataFrame({
         "person_key": "person-a",
+        "run_id": "run-a",
+        "dataset_id": "dataset-a",
+        "day_key": "2026-01-01",
+        "session_id": "session-a",
         "canonical_time": times,
         "label": truth,
         "probability": probability,
@@ -4465,26 +4491,31 @@ def test_round6_ml_dl_segment_boundaries_close_event_and_alert_state() -> None:
     rows = [
         {
             "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "day_key": "2026-01-01",
             "session_id": "s1", "canonical_time": pd.Timestamp("2026-01-01T00:00:00Z"),
             "truth": 0, "probability": 0.8,
         },
         {
             "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "day_key": "2026-01-01",
             "session_id": "s2", "canonical_time": pd.Timestamp("2026-01-01T00:00:01Z"),
             "truth": 1, "probability": 0.8,
         },
         {
             "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "day_key": "2026-01-01",
             "session_id": "s2", "canonical_time": pd.Timestamp("2026-01-01T00:00:02Z"),
             "truth": 0, "probability": 0.0,
         },
         {
             "person_key": "p1", "run_id": "r2", "dataset_id": "d1",
+            "day_key": "2026-01-01",
             "session_id": "s2", "canonical_time": pd.Timestamp("2026-01-01T00:00:05Z"),
             "truth": 1, "probability": 0.8,
         },
         {
             "person_key": "p1", "run_id": "r2", "dataset_id": "d1",
+            "day_key": "2026-01-01",
             "session_id": "s2", "canonical_time": pd.Timestamp("2026-01-01T00:00:06Z"),
             "truth": 0, "probability": 0.0,
         },
@@ -4543,6 +4574,7 @@ def test_round6_forecast_uses_prior_60s_ring_and_fixed_histograms() -> None:
         for offset in range(length):
             row = {
                 "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+                "day_key": "2026-01-01",
                 "session_id": session,
                 "canonical_time": pd.Timestamp("2026-01-01T00:00:00Z")
                 + pd.Timedelta(seconds=start_second + offset),
@@ -4561,6 +4593,7 @@ def test_round6_forecast_uses_prior_60s_ring_and_fixed_histograms() -> None:
     state.update_row(
         {
             "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "day_key": "2026-01-01",
             "session_id": "gap-reset",
             "canonical_time": pd.Timestamp("2026-01-01T00:10:00Z"),
         },
@@ -4570,6 +4603,7 @@ def test_round6_forecast_uses_prior_60s_ring_and_fixed_histograms() -> None:
     state.update_row(
         {
             "person_key": "p1", "run_id": "r1", "dataset_id": "d1",
+            "day_key": "2026-01-01",
             "session_id": "gap-reset",
             "canonical_time": pd.Timestamp("2026-01-01T00:10:05Z"),
         },
@@ -4624,3 +4658,262 @@ def test_round6_streaming_contract_uses_segment_state_and_bounded_forecast() -> 
         "forecast_left_censored_support",
     ):
         assert token in metrics
+
+
+def test_round7_forecast_onset_uses_physical_event_not_pattern_stage() -> None:
+    """LOW may precede onset; forecast lead must start at event_binary 0->1."""
+    source, tree = _dl_tcn_ast()
+    streaming = ast.get_source_segment(
+        source, _named_definition(tree, "StreamingEvaluationState")
+    ) or ""
+    forecast_source = ast.get_source_segment(
+        source, _named_definition(tree, "BoundedForecastLeadState")
+    ) or ""
+    import_source = "\n".join(
+        ast.get_source_segment(source, node) or ""
+        for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        and any(
+            alias.name == "deque"
+            for alias in getattr(node, "names", ())
+        )
+    )
+    namespace = {"np": np, "pd": pd, "Any": Any, "Mapping": dict}
+    exec(import_source + "\n" + forecast_source, namespace)
+    state = namespace["BoundedForecastLeadState"](bins=101)
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    for second in range(31):
+        row = {
+            "person_key": "p1",
+            "run_id": "r1",
+            "dataset_id": "d1",
+            "day_key": "2026-01-01",
+            "session_id": "s1",
+            "canonical_time": start + pd.Timedelta(seconds=second),
+            # Pattern is already LOW before the observed physical onset.
+            "label": int(second >= 10),
+            "audit_event_binary": int(second >= 30),
+        }
+        state.update_row(
+            row,
+            truth=row["audit_event_binary"],
+            probability=0.9 if second == 0 else 0.0,
+        )
+    summary = state.summary(threshold=0.5)
+    assert summary["forecast_lead_support"] == 1
+    assert summary["forecast_lead_mean_seconds"] == 30
+    assert "truth=int(pattern['audit_event_binary'])" in streaming
+    assert "truth=int(pattern['label'])" not in streaming.split(
+        "self.forecast_state.update_row", 1
+    )[1]
+
+
+def test_round7_day_and_session_identity_propagates_03_to_04_to_02() -> None:
+    """Real day/session columns survive windows, DL shards, and ML predictions."""
+    sequence = dl_sequence_namespace()
+    sequence["SEQUENCE_LENGTHS_SECONDS"] = (3,)
+    frame = _sequence_source_frame()
+    frame.loc[4:, "session_id"] = "session-2"
+    index = sequence["make_causal_window_index"](frame, length_seconds=3)
+    assert {"day_key", "session_id"}.issubset(index.columns)
+    assert set(index["session_id"]) == {"session-1", "session-2"}
+    schema = sequence["sequence_index_arrow_schema"]()
+    assert schema.names.count("day_key") == 1
+    assert schema.names.count("session_id") == 1
+    # No causal window may bridge the contiguous timestamp session reset.
+    assert set(index["prediction_time"]) == {
+        frame.loc[2, "canonical_time"],
+        frame.loc[3, "canonical_time"],
+        frame.loc[6, "canonical_time"],
+        frame.loc[7, "canonical_time"],
+    }
+
+    dl_source, dl_tree = _dl_tcn_ast()
+    dataset = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "Goal15SequenceDataset")
+    ) or ""
+    shard_schema = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "prediction_shard_arrow_schema")
+    ) or ""
+    bounded_rows = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "_bounded_prediction_rows")
+    ) or ""
+    for token in ("'day_key'", "'session_id'"):
+        assert token in dataset
+        assert token in shard_schema
+        assert token in bounded_rows
+
+    class FakeTensor:
+        def __init__(self, values: Any) -> None:
+            self.values = np.asarray(values)
+
+        def float(self) -> FakeTensor:
+            return self
+
+        def cpu(self) -> FakeTensor:
+            return self
+
+        def numpy(self) -> np.ndarray:
+            return self.values
+
+    class FakeTorch:
+        Tensor = FakeTensor
+
+        @staticmethod
+        def sigmoid(value: FakeTensor) -> FakeTensor:
+            return value
+
+        @staticmethod
+        def softmax(value: FakeTensor, dim: int) -> FakeTensor:
+            assert dim == 1
+            return value
+
+    dl_namespace = {
+        "Any": Any,
+        "Mapping": dict,
+        "np": np,
+        "torch": FakeTorch,
+        "PATTERN_TARGET": "pattern_binary",
+        "ONSET_EVENT_TARGET": "event_binary",
+        "STAGE_TARGET": "stage_code",
+        "STAGE_CODES": ("LOW", "MEDIUM", "HIGH", "DECREASING", "RECOVERY"),
+        "BEHAVIOR_CODES": BEHAVIOR_CODES,
+        "SERIES_ID": "mvp3-oracle-v1",
+    }
+    exec(bounded_rows, dl_namespace)
+    raw_batch = {
+        "pattern_binary": FakeTensor([1]),
+        "event_binary": FakeTensor([0]),
+        "hard_negative": FakeTensor([0]),
+        "behaviors": FakeTensor([[0] * len(BEHAVIOR_CODES)]),
+        "stage_code": FakeTensor([0]),
+        "dataset_id": ["d1"],
+        "run_id": ["r1"],
+        "person_key": ["p1"],
+        "day_key": ["2026-01-01"],
+        "session_id": ["s1"],
+        "canonical_time": ["2026-01-01T00:00:00+00:00"],
+        "window_id": ["w1"],
+    }
+    outputs = {
+        "event_logits": FakeTensor([0.8]),
+        "stage_logits": FakeTensor([[0.8, 0.05, 0.05, 0.05, 0.05]]),
+        "behavior_logits": FakeTensor([[0.1] * len(BEHAVIOR_CODES)]),
+    }
+    dl_rows = dl_namespace["_bounded_prediction_rows"](
+        raw_batch, outputs, "validation", "tcn", {}
+    )
+    assert {row["day_key"] for row in dl_rows} == {"2026-01-01"}
+    assert {row["session_id"] for row in dl_rows} == {"s1"}
+
+    ml = ml_benchmark_namespace()
+    identity = pd.DataFrame(
+        {
+            "person_key": ["p1"],
+            "run_id": ["r1"],
+            "dataset_id": ["d1"],
+            "day_key": ["2026-01-01"],
+            "session_id": ["s1"],
+            "canonical_time": [pd.Timestamp("2026-01-01T00:00:00Z")],
+        }
+    )
+    validated = ml["_validate_public_evaluation_identity"](identity)
+    assert validated.loc[0, "day_key"] == "2026-01-01"
+    assert validated.loc[0, "session_id"] == "s1"
+    ml_source = code_cell_source(
+        load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
+    )
+    ml_tree = ast.parse(ml_source)
+    prediction_rows = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "_prediction_rows")
+    ) or ""
+    assert "_validate_public_evaluation_identity" in prediction_rows
+    assert '"day_key"' in prediction_rows
+    assert '"session_id"' in prediction_rows
+
+
+def test_round7_sequence_public_build_rejects_missing_segment_identity() -> None:
+    """Public 03 build never invents day/session identity from a timestamp."""
+    namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
+    for missing in ("day_key", "session_id"):
+        with pytest.raises(ValueError, match=missing):
+            namespace["make_causal_window_index"](
+                _sequence_source_frame().drop(columns=missing),
+                length_seconds=3,
+            )
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "match"),
+    [
+        ("person_key", None, "person_key"),
+        ("run_id", "   ", "run_id"),
+        ("dataset_id", "", "dataset_id"),
+        ("canonical_time", pd.Timestamp("2026-01-01"), "UTC-aware"),
+        ("canonical_time", pd.NaT, "canonical_time"),
+    ],
+)
+def test_round7_public_evaluation_identity_is_fail_closed(
+    column: str, value: Any, match: str
+) -> None:
+    """Public evaluation never converts missing identity/time into unknown values."""
+    frame = pd.DataFrame(
+        {
+            "person_key": ["p1"],
+            "run_id": ["r1"],
+            "dataset_id": ["d1"],
+            "day_key": ["2026-01-01"],
+            "session_id": ["s1"],
+            "canonical_time": [pd.Timestamp("2026-01-01T00:00:00Z")],
+        }
+    )
+    if column == "canonical_time":
+        frame[column] = pd.Series([value], dtype="object")
+    else:
+        frame.loc[0, column] = value
+    for namespace in (ml_benchmark_namespace(),):
+        with pytest.raises(ValueError, match=match):
+            namespace["_validate_public_evaluation_identity"](frame)
+
+    dl_source, dl_tree = _dl_tcn_ast()
+    validator = ast.get_source_segment(
+        dl_source,
+        _named_definition(dl_tree, "_validate_public_evaluation_identity"),
+    ) or ""
+    namespace = {"pd": pd}
+    exec(validator, namespace)
+    with pytest.raises(ValueError, match=match):
+        namespace["_validate_public_evaluation_identity"](frame)
+
+
+def test_round7_segment_state_rejects_missing_identity_and_naive_time() -> None:
+    """Streaming public state fails closed before any metric mutation."""
+    source, tree = _dl_tcn_ast()
+    segment_source = ast.get_source_segment(
+        source, _named_definition(tree, "SegmentEventGridState")
+    ) or ""
+    namespace = {
+        "np": np,
+        "pd": pd,
+        "Any": Any,
+        "Mapping": dict,
+        "COMMON_THRESHOLD_GRID_SIZE": 101,
+    }
+    exec(segment_source, namespace)
+    base = {
+        "person_key": "p1",
+        "run_id": "r1",
+        "dataset_id": "d1",
+        "day_key": "2026-01-01",
+        "session_id": "s1",
+        "canonical_time": pd.Timestamp("2026-01-01T00:00:00Z"),
+    }
+    for broken in (
+        {key: value for key, value in base.items() if key != "run_id"},
+        {**base, "canonical_time": pd.Timestamp("2026-01-01")},
+        {**base, "canonical_time": pd.NaT},
+    ):
+        state = namespace["SegmentEventGridState"](bins=101)
+        with pytest.raises(ValueError):
+            state.update_row(broken, truth=0, probability=0.1)
