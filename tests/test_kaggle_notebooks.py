@@ -18,6 +18,7 @@ SHARED_CONSTANTS = (
     'EXPECTED_SPLIT_COUNTS = {"train": 24, "validation": 6, "locked_test": 6}',
     'DATA_STATUS = "oracle/sanity"',
     'REAL_ACCURACY_STATUS = "NOT VERIFIED"',
+    'DEVICE_SYNCHRONIZATION_STATUS = "NOT_AVAILABLE_TRUTH_ONLY"',
     "RUN_TRAINING = False",
     "RUN_LOCKED_TEST = False",
 )
@@ -32,10 +33,17 @@ def load_notebooks() -> dict[Path, dict[str, Any]]:
 
 def notebook_source(notebook: dict[str, Any]) -> str:
     return "\n".join(
-        "".join(cell.get("source", []))
+        normalize_cell_source(cell.get("source"))
         for cell in notebook["cells"]
-        if isinstance(cell.get("source"), list)
     )
+
+
+def normalize_cell_source(source: Any) -> str:
+    if isinstance(source, str):
+        return source
+    if isinstance(source, list):
+        return "".join(source)
+    return ""
 
 
 def test_notebooks_have_required_structure() -> None:
@@ -45,6 +53,22 @@ def test_notebooks_have_required_structure() -> None:
         assert "markdown" in cell_types, path
         assert "code" in cell_types, path
         assert notebook["metadata"]["kernelspec"]["name"] == "python3", path
+
+
+def test_kaggle_directory_contains_exactly_the_four_contract_notebooks() -> None:
+    assert sorted(path.name for path in KAGGLE_DIR.glob("*.ipynb")) == NOTEBOOKS
+
+
+def test_notebooks_have_korean_title_english_purpose_and_oracle_warning() -> None:
+    for path, notebook in load_notebooks().items():
+        markdown = "\n".join(
+            "".join(cell["source"])
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "markdown"
+        )
+        assert any("가" <= character <= "힣" for character in markdown), path
+        assert "Purpose:" in markdown, path
+        assert "oracle/sanity-only" in markdown, path
 
 
 def test_notebooks_are_unexecuted() -> None:
@@ -60,6 +84,19 @@ def test_notebooks_do_not_embed_secrets() -> None:
     for path, notebook in load_notebooks().items():
         source = notebook_source(notebook)
         assert not any(token in source for token in forbidden), path
+
+
+def test_notebook_source_includes_string_form_cell_source_for_secret_checks() -> None:
+    notebook = {
+        "cells": [
+            {
+                "cell_type": "code",
+                "source": "WANDB_API_KEY=must-not-be-embedded",
+            }
+        ]
+    }
+    source = notebook_source(notebook)
+    assert "WANDB_API_KEY=" in source
 
 
 def test_notebooks_declare_shared_safety_constants() -> None:
