@@ -1332,6 +1332,7 @@ def _sequence_source_frame() -> pd.DataFrame:
                 "dataset_id": "dataset-1",
                 "session_id": "session-1",
                 "day_key": "2026-01-01",
+                "context": "focused_task",
                 "canonical_time": start + pd.Timedelta(seconds=second),
                 "split_role": "train",
                 "missing_block": False,
@@ -1417,19 +1418,23 @@ def test_sample_training_windows_is_deterministic_and_retains_required_windows()
     assert len(first.loc[first["sample_type"] == "hard_negative"]) == 1
 
 
-def test_validate_shared_dataset_identity_rejects_changed_split_hash() -> None:
+def test_validate_shared_dataset_identity_rejects_changed_split_hash(tmp_path: Path) -> None:
     namespace = dl_sequence_namespace()
+    source_hash, split_hash = _write_flat_identity_fixture(tmp_path)
     manifest = {
         "series_id": "mvp3-oracle-v1",
         "data_status": "oracle/sanity",
-        "source_dataset_hash": "a" * 64,
-        "split_hash": "b" * 64,
+        "source_dataset_hash": source_hash,
+        "split_hash": split_hash,
     }
 
-    assert namespace["validate_shared_dataset_identity"](manifest) == ("a" * 64, "b" * 64)
+    assert namespace["validate_shared_dataset_identity"](manifest, tmp_path) == (
+        source_hash,
+        split_hash,
+    )
     manifest["split_hash"] = "wrong"
     with pytest.raises(ValueError, match="split hash"):
-        namespace["validate_shared_dataset_identity"](manifest)
+        namespace["validate_shared_dataset_identity"](manifest, tmp_path)
 
 
 def test_write_sequence_manifest_hashes_indexes_and_train_statistics(tmp_path: Path) -> None:
@@ -1460,3 +1465,227 @@ def test_write_sequence_manifest_hashes_indexes_and_train_statistics(tmp_path: P
     assert manifest["files"]["validation_300"]["sha256"] == hashlib.sha256(
         index_paths["validation_300"].read_bytes()
     ).hexdigest()
+
+
+def _write_flat_identity_fixture(root: Path) -> tuple[str, str]:
+    root.mkdir(parents=True, exist_ok=True)
+    for name, payload in {
+        "prepared__manifest.json": {"series_id": "mvp3-oracle-v1", "kind": "prepared"},
+        "outcomes__manifest.json": {"series_id": "mvp3-oracle-v1", "kind": "outcomes"},
+        "registry__manifest.json": {"series_id": "mvp3-oracle-v1", "kind": "registry"},
+    }.items():
+        (root / name).write_text(json.dumps(payload, sort_keys=True))
+    split = pd.DataFrame(
+        {
+            "person_key": [
+                *(f"train-{index:02d}" for index in range(24)),
+                *(f"validation-{index:02d}" for index in range(6)),
+                *(f"locked-{index:02d}" for index in range(6)),
+            ],
+            "split_role": ["train"] * 24 + ["validation"] * 6 + ["locked_test"] * 6,
+        }
+    )
+    split_path = root / "registry__splits.parquet"
+    split.to_parquet(split_path, index=False)
+    manifest_hashes = {
+        name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+        for name in (
+            "prepared__manifest.json",
+            "outcomes__manifest.json",
+            "registry__manifest.json",
+        )
+    }
+    return (
+        hashlib.sha256(json.dumps(manifest_hashes, sort_keys=True).encode()).hexdigest(),
+        hashlib.sha256(split_path.read_bytes()).hexdigest(),
+    )
+
+
+def test_shared_identity_recomputes_original_flat_dataset_hashes(tmp_path: Path) -> None:
+    namespace = dl_sequence_namespace()
+    source_hash, split_hash = _write_flat_identity_fixture(tmp_path)
+    view_manifest = {
+        "series_id": "mvp3-oracle-v1",
+        "data_status": "oracle/sanity",
+        "source_dataset_hash": source_hash,
+        "split_hash": split_hash,
+    }
+
+    assert namespace["validate_shared_dataset_identity"](view_manifest, tmp_path) == (
+        source_hash,
+        split_hash,
+    )
+    (tmp_path / "outcomes__manifest.json").write_text(
+        json.dumps({"series_id": "mvp3-oracle-v1", "kind": "changed"}, sort_keys=True)
+    )
+    with pytest.raises(ValueError, match="source dataset hash"):
+        namespace["validate_shared_dataset_identity"](view_manifest, tmp_path)
+
+
+def _strict_sequence_frame(namespace: dict[str, Any]) -> pd.DataFrame:
+    row: dict[str, Any] = {
+        "person_key": "P1",
+        "run_id": "run-1",
+        "dataset_id": "dataset-1",
+        "canonical_time": pd.Timestamp("2026-01-01T00:00:00Z"),
+        "split_role": "train",
+        "context": "focused_task",
+        "pattern_binary": 0,
+        "event_binary": 1,
+        "hard_negative": 0,
+        "stage_code": "NO_EVENT",
+    }
+    row.update({behavior: 0 for behavior in namespace["BEHAVIOR_CODES"]})
+    row.update({feature: 0.0 for feature in namespace["ALLOWED_FEATURE_COLUMNS"]})
+    return pd.DataFrame([row])
+
+
+def test_sequence_role_contract_requires_full_ordered_causal_features() -> None:
+    namespace = dl_sequence_namespace()
+    frame = _strict_sequence_frame(namespace)
+
+    assert namespace["validate_sequence_role_frame"](frame, "train") == list(
+        namespace["ALLOWED_FEATURE_COLUMNS"]
+    )
+    with pytest.raises(ValueError, match="missing approved features"):
+        namespace["validate_sequence_role_frame"](
+            frame.drop(columns=namespace["ALLOWED_FEATURE_COLUMNS"][0]), "train"
+        )
+    frame["numeric_leak"] = 1.0
+    with pytest.raises(ValueError, match="unapproved"):
+        namespace["validate_sequence_role_frame"](frame, "train")
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda frame, namespace: frame.assign(pattern_binary=1),
+        lambda frame, namespace: frame.assign(stage_code="INVALID"),
+        lambda frame, namespace: frame.assign(hard_negative=1, pattern_binary=1),
+        lambda frame, namespace: frame.assign(ear_covering=1),
+        lambda frame, namespace: frame.assign(event_binary=np.nan),
+    ],
+    ids=("stage-pattern-mismatch", "invalid-stage", "overlap", "ordinary-behavior", "null-binary"),
+)
+def test_sequence_role_contract_rejects_invalid_labels(
+    mutate: Any,
+) -> None:
+    namespace = dl_sequence_namespace()
+    frame = mutate(_strict_sequence_frame(namespace), namespace)
+
+    with pytest.raises(ValueError):
+        namespace["validate_sequence_role_frame"](frame, "train")
+
+
+def test_matched_baseline_sampling_stays_in_person_run_context_stratum() -> None:
+    namespace = dl_sequence_namespace()
+    index = pd.DataFrame(
+        {
+            "person_key": ["P1", "P1", "P1", "P2", "P2", "P2"],
+            "run_id": ["run"] * 6,
+            "dataset_id": ["dataset"] * 6,
+            "context": ["A", "A", "B", "A", "A", "A"],
+            "split_role": ["train"] * 6,
+            "pattern_binary": [1, 0, 0, 0, 0, 0],
+            "hard_negative": [0] * 6,
+            "length_seconds": [300] * 6,
+            "prediction_time": pd.date_range("2026-01-01", periods=6, freq="s", tz="UTC"),
+            "window_id": [f"window-{index}" for index in range(6)],
+        }
+    )
+
+    sampled = namespace["sample_training_windows"](index, baseline_multiplier=3)
+
+    assert set(sampled["person_key"]) == {"P1"}
+    assert set(sampled["context"]) == {"A"}
+    assert len(sampled.loc[sampled["sample_type"] == "matched_baseline"]) == 1
+
+
+def _write_strict_ml_views(
+    root: Path,
+    namespace: dict[str, Any],
+    source_hash: str,
+    split_hash: str,
+) -> None:
+    files: dict[str, dict[str, Any]] = {}
+    role_counts = {"train": 24, "validation": 6, "locked_test": 6}
+    for split_role, count in role_counts.items():
+        rows = []
+        prefix = "locked" if split_role == "locked_test" else split_role
+        for index in range(count):
+            frame = _strict_sequence_frame(namespace)
+            frame["person_key"] = f"{prefix}-{index:02d}"
+            frame["split_role"] = split_role
+            frame["canonical_time"] = pd.Timestamp("2026-01-01T00:00:00Z")
+            rows.append(frame)
+        role_frame = pd.concat(rows, ignore_index=True)
+        path = root / f"{split_role}.parquet"
+        role_frame.to_parquet(path, index=False, compression="zstd", row_group_size=1)
+        files[split_role] = {
+            "path": path.name,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "row_count": len(role_frame),
+            "columns": list(role_frame.columns),
+        }
+    (root / "view_manifest.json").write_text(
+        json.dumps(
+            {
+                "series_id": "mvp3-oracle-v1",
+                "data_status": "oracle/sanity",
+                "source_dataset_hash": source_hash,
+                "split_hash": split_hash,
+                "files": files,
+            }
+        )
+    )
+
+
+def test_bounded_sequence_build_never_reads_complete_role_parquet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    namespace = dl_sequence_namespace()
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    views_root = tmp_path / "views"
+    views_root.mkdir()
+    _write_strict_ml_views(views_root, namespace, source_hash, split_hash)
+    real_read_parquet = pd.read_parquet
+
+    def reject_complete_role_read(path: Any, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        if Path(path).parent == views_root:
+            raise AssertionError("complete ML role parquet read")
+        return real_read_parquet(path, *args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_parquet", reject_complete_role_read)
+    output_root = tmp_path / "output"
+    manifest_path = namespace["build_all_sequence_indexes"](
+        flat_dataset_root=flat_root,
+        ml_view_root=views_root,
+        output_root=output_root,
+    )
+
+    assert manifest_path.is_file()
+    assert (output_root / "train_300.parquet").is_file()
+
+
+def test_verified_role_views_reject_cross_role_feature_type_mismatch(tmp_path: Path) -> None:
+    namespace = dl_sequence_namespace()
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    views_root = tmp_path / "views"
+    views_root.mkdir()
+    _write_strict_ml_views(views_root, namespace, source_hash, split_hash)
+    feature = namespace["ALLOWED_FEATURE_COLUMNS"][0]
+    validation_path = views_root / "validation.parquet"
+    validation = pd.read_parquet(validation_path)
+    validation[feature] = validation[feature].astype("string")
+    validation.to_parquet(validation_path, index=False, compression="zstd", row_group_size=1)
+    manifest_path = views_root / "view_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["validation"]["sha256"] = hashlib.sha256(
+        validation_path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="feature schema mismatch"):
+        namespace["_verified_role_views"](views_root, flat_root)
