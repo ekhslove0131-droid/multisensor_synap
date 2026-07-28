@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 
 KAGGLE_DIR = Path(__file__).parents[1] / "kaggle"
@@ -1429,6 +1430,8 @@ def test_validate_shared_dataset_identity_rejects_changed_split_hash(tmp_path: P
         "data_status": "oracle/sanity",
         "source_dataset_hash": source_hash,
         "split_hash": split_hash,
+        "source_content_inventory": _FLAT_SOURCE_INVENTORIES[source_hash][0],
+        "source_content_inventory_hash": _FLAT_SOURCE_INVENTORIES[source_hash][1],
     }
 
     assert namespace["validate_shared_dataset_identity"](manifest, tmp_path) == (
@@ -1470,10 +1473,47 @@ def test_write_sequence_manifest_hashes_indexes_and_train_statistics(tmp_path: P
     ).hexdigest()
 
 
-def _write_flat_identity_fixture(root: Path) -> tuple[str, str]:
+_FLAT_SOURCE_INVENTORIES: dict[str, tuple[list[dict[str, Any]], str]] = {}
+
+
+def _write_flat_identity_fixture(
+    root: Path,
+    *,
+    person_row_counts: dict[str, int] | None = None,
+) -> tuple[str, str]:
     root.mkdir(parents=True, exist_ok=True)
+    person_row_counts = person_row_counts or {}
+    people: list[dict[str, str]] = []
+    person_keys = [
+        *(f"train-{index:02d}" for index in range(24)),
+        *(f"validation-{index:02d}" for index in range(6)),
+        *(f"locked-{index:02d}" for index in range(6)),
+    ]
+    for person_key in person_keys:
+        dataset_id = f"source-{person_key}"
+        row_count = person_row_counts.get(person_key, 1)
+        pd.DataFrame(
+            {
+                "person_key": [person_key] * row_count,
+                "run_id": ["run-1"] * row_count,
+                "person_id": [person_key] * row_count,
+                "source_value": np.arange(row_count, dtype=np.float64),
+            }
+        ).to_parquet(root / f"prepared__people__{dataset_id}.parquet", index=False)
+        people.append(
+            {
+                "dataset_id": dataset_id,
+                "person_key": person_key,
+                "run_id": "run-1",
+                "person_id": person_key,
+            }
+        )
     for name, payload in {
-        "prepared__manifest.json": {"series_id": "mvp3-oracle-v1", "kind": "prepared"},
+        "prepared__manifest.json": {
+            "series_id": "mvp3-oracle-v1",
+            "kind": "prepared",
+            "people": people,
+        },
         "outcomes__manifest.json": {"series_id": "mvp3-oracle-v1", "kind": "outcomes"},
         "registry__manifest.json": {"series_id": "mvp3-oracle-v1", "kind": "registry"},
     }.items():
@@ -1498,10 +1538,39 @@ def _write_flat_identity_fixture(root: Path) -> tuple[str, str]:
             "registry__manifest.json",
         )
     }
-    return (
-        hashlib.sha256(json.dumps(manifest_hashes, sort_keys=True).encode()).hexdigest(),
-        hashlib.sha256(split_path.read_bytes()).hexdigest(),
-    )
+    inventory: list[dict[str, Any]] = []
+    for person in sorted(people, key=lambda item: item["dataset_id"]):
+        path = root / f"prepared__people__{person['dataset_id']}.parquet"
+        parquet = pq.ParquetFile(path)
+        schema_hash = hashlib.sha256(
+            parquet.schema_arrow.remove_metadata().serialize().to_pybytes()
+        ).hexdigest()
+        inventory.append(
+            {
+                **person,
+                "path": path.name,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "row_count": parquet.metadata.num_rows,
+                "schema_fingerprint": schema_hash,
+            }
+        )
+    inventory_hash = hashlib.sha256(
+        json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    split_hash = hashlib.sha256(split_path.read_bytes()).hexdigest()
+    source_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "manifest_hashes": dict(sorted(manifest_hashes.items())),
+                "prepared_source_inventory_hash": inventory_hash,
+                "split_sha256": split_hash,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    _FLAT_SOURCE_INVENTORIES[source_hash] = (inventory, inventory_hash)
+    return source_hash, split_hash
 
 
 def test_shared_identity_recomputes_original_flat_dataset_hashes(tmp_path: Path) -> None:
@@ -1512,6 +1581,8 @@ def test_shared_identity_recomputes_original_flat_dataset_hashes(tmp_path: Path)
         "data_status": "oracle/sanity",
         "source_dataset_hash": source_hash,
         "split_hash": split_hash,
+        "source_content_inventory": _FLAT_SOURCE_INVENTORIES[source_hash][0],
+        "source_content_inventory_hash": _FLAT_SOURCE_INVENTORIES[source_hash][1],
     }
 
     assert namespace["validate_shared_dataset_identity"](view_manifest, tmp_path) == (
@@ -1619,7 +1690,9 @@ def _write_strict_ml_views(
         prefix = "locked" if split_role == "locked_test" else split_role
         for index in range(count):
             frame = _strict_sequence_frame(namespace)
-            frame["person_key"] = f"{prefix}-{index:02d}"
+            person_key = f"{prefix}-{index:02d}"
+            frame["person_key"] = person_key
+            frame["dataset_id"] = f"source-{person_key}"
             frame["split_role"] = split_role
             frame["canonical_time"] = pd.Timestamp("2026-01-01T00:00:00Z")
             rows.append(frame)
@@ -1632,26 +1705,34 @@ def _write_strict_ml_views(
             "row_count": len(role_frame),
             "columns": list(role_frame.columns),
         }
-    full_files = {
-        role: {
+    full_files = {}
+    for role, metadata in files.items():
+        frame = pd.read_parquet(root / metadata["path"], columns=["dataset_id"])
+        full_files[role] = {
             **metadata,
             "feature_columns": list(namespace["ALLOWED_FEATURE_COLUMNS"]),
-            "dataset_ids": ["dataset-1"],
+            "dataset_ids": sorted(frame["dataset_id"].unique()),
             "view_kind": "full_causal_timeline",
             "sampled": False,
         }
-        for role, metadata in files.items()
-    }
     manifest = {
         "series_id": "mvp3-oracle-v1",
         "data_status": "oracle/sanity",
         "source_dataset_hash": source_hash,
         "split_hash": split_hash,
         "files": files,
+        "source_content_inventory": _FLAT_SOURCE_INVENTORIES[source_hash][0],
+        "source_content_inventory_hash": _FLAT_SOURCE_INVENTORIES[source_hash][1],
     }
     if include_full_timeline:
         manifest["dl_timeline_files"] = full_files
     (root / "view_manifest.json").write_text(json.dumps(manifest))
+
+
+def _bind_fixture_dataset_ids(frame: pd.DataFrame) -> pd.DataFrame:
+    bound = frame.copy()
+    bound["dataset_id"] = "source-" + bound["person_key"].astype(str)
+    return bound
 
 
 def test_bounded_sequence_build_never_reads_complete_role_parquet(
@@ -1690,7 +1771,9 @@ def test_sequence_build_handles_empty_first_chunk_before_later_window(
 ) -> None:
     namespace = dl_sequence_namespace()
     flat_root = tmp_path / "flat"
-    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    source_hash, split_hash = _write_flat_identity_fixture(
+        flat_root, person_row_counts={"train-00": 301}
+    )
     views_root = tmp_path / "views"
     views_root.mkdir()
     _write_strict_ml_views(views_root, namespace, source_hash, split_hash)
@@ -1712,7 +1795,9 @@ def test_sequence_build_handles_empty_first_chunk_before_later_window(
         row = _strict_sequence_frame(namespace)
         row["person_key"] = f"train-{index:02d}"
         membership_rows.append(row)
-    train = pd.concat([first, pd.DataFrame(later_rows), *membership_rows], ignore_index=True)
+    train = _bind_fixture_dataset_ids(
+        pd.concat([first, pd.DataFrame(later_rows), *membership_rows], ignore_index=True)
+    )
     train_path = views_root / "train.parquet"
     train.to_parquet(train_path, index=False, compression="zstd", row_group_size=1)
     view_manifest_path = views_root / "view_manifest.json"
@@ -1789,6 +1874,7 @@ def _write_row_grouped_sequence_views(
     train_groups: list[pd.DataFrame],
 ) -> None:
     _write_strict_ml_views(root, namespace, source_hash, split_hash)
+    train_groups = [_bind_fixture_dataset_ids(group) for group in train_groups]
     train_path = root / "train.parquet"
     schema = namespace["pa"].Table.from_pandas(train_groups[0], preserve_index=False).schema
     writer = namespace["pq"].ParquetWriter(train_path, schema, compression="zstd")
@@ -1808,6 +1894,9 @@ def _write_row_grouped_sequence_views(
     manifest["dl_timeline_files"]["train"]["row_count"] = sum(
         len(group) for group in train_groups
     )
+    manifest["dl_timeline_files"]["train"]["dataset_ids"] = sorted(
+        pd.concat(train_groups, ignore_index=True)["dataset_id"].unique()
+    )
     manifest_path.write_text(json.dumps(manifest))
 
 
@@ -1817,7 +1906,9 @@ def test_sequence_build_is_row_group_layout_invariant_for_global_train_sampling(
     namespace = dl_sequence_namespace()
     namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
     flat_root = tmp_path / "flat"
-    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    source_hash, split_hash = _write_flat_identity_fixture(
+        flat_root, person_row_counts={"train-00": 17}
+    )
     start = pd.Timestamp("2026-01-01T00:00:00Z")
     timeline_rows = []
     for second in range(17):
@@ -2110,18 +2201,6 @@ def test_sequence_temp_spools_are_removed_when_role_validation_fails(
     views_root = tmp_path / "views"
     views_root.mkdir()
     _write_strict_ml_views(views_root, namespace, source_hash, split_hash)
-    manifest_path = views_root / "view_manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    manifest["dl_timeline_files"] = {}
-    for role, metadata in manifest["files"].items():
-        manifest["dl_timeline_files"][role] = {
-            **metadata,
-            "view_kind": "full_causal_timeline",
-            "sampled": False,
-            "feature_columns": list(namespace["ALLOWED_FEATURE_COLUMNS"]),
-            "dataset_ids": ["dataset-1"],
-        }
-    manifest_path.write_text(json.dumps(manifest))
     output_root = tmp_path / "output"
 
     original_make_index = namespace["make_causal_window_index"]
@@ -2156,6 +2235,7 @@ def _write_dual_view_fixture(
     train_groups: list[pd.DataFrame],
 ) -> None:
     _write_strict_ml_views(root, namespace, source_hash, split_hash)
+    train_groups = [_bind_fixture_dataset_ids(group) for group in train_groups]
     manifest_path = root / "view_manifest.json"
     manifest = json.loads(manifest_path.read_text())
     full_files: dict[str, dict[str, Any]] = {}
@@ -2170,7 +2250,7 @@ def _write_dual_view_fixture(
             "row_count": len(frame),
             "columns": list(frame.columns),
             "feature_columns": list(namespace["ALLOWED_FEATURE_COLUMNS"]),
-            "dataset_ids": ["dataset-1"],
+            "dataset_ids": sorted(frame["dataset_id"].unique()),
             "view_kind": "full_causal_timeline",
             "sampled": False,
         }
@@ -2192,7 +2272,9 @@ def _write_dual_view_fixture(
         "row_count": sum(len(group) for group in train_groups),
         "columns": list(schema.names),
         "feature_columns": list(namespace["ALLOWED_FEATURE_COLUMNS"]),
-        "dataset_ids": ["dataset-1"],
+        "dataset_ids": sorted(
+            pd.concat(train_groups, ignore_index=True)["dataset_id"].unique()
+        ),
         "view_kind": "full_causal_timeline",
         "sampled": False,
     }
@@ -2209,7 +2291,9 @@ def test_dual_views_produce_layout_invariant_600s_windows_and_baselines(
     namespace = dl_sequence_namespace()
     namespace["SEQUENCE_LENGTHS_SECONDS"] = (600,)
     flat_root = tmp_path / "flat"
-    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    source_hash, split_hash = _write_flat_identity_fixture(
+        flat_root, person_row_counts={"train-00": 604}
+    )
     start = pd.Timestamp("2026-01-01T00:00:00Z")
     timeline_rows = []
     for second in range(604):
@@ -2280,3 +2364,332 @@ def test_dual_views_produce_layout_invariant_600s_windows_and_baselines(
     assert whole.sort_values("window_id").reset_index(drop=True).equals(
         split.sort_values("window_id").reset_index(drop=True)
     )
+
+
+def _write_physical_prepared_fixture(root: Path) -> list[dict[str, str]]:
+    people: list[dict[str, str]] = []
+    for index, person_key in enumerate(("train-00", "validation-00", "locked-00")):
+        dataset_id = f"source-{index}"
+        path = root / f"prepared__people__{dataset_id}.parquet"
+        pd.DataFrame(
+            {
+                "person_key": [person_key],
+                "run_id": [f"run-{index}"],
+                "person_id": [f"P{index}"],
+                "value": [float(index)],
+            }
+        ).to_parquet(path, index=False)
+        people.append(
+            {
+                "person_key": person_key,
+                "run_id": f"run-{index}",
+                "person_id": f"P{index}",
+                "dataset_id": dataset_id,
+            }
+        )
+    return people
+
+
+def test_source_dataset_identity_binds_physical_prepared_parquet_bytes(
+    tmp_path: Path,
+) -> None:
+    """Changing prepared bytes must change the source identity without trusting logical_hash."""
+    namespace = ml_data_namespace()
+    people = _write_physical_prepared_fixture(tmp_path)
+    manifest_hashes = {
+        "prepared__manifest.json": "a" * 64,
+        "outcomes__manifest.json": "b" * 64,
+        "registry__manifest.json": "c" * 64,
+    }
+    split_path = tmp_path / "registry__splits.parquet"
+    pd.DataFrame({"person_key": ["train-00"], "split_role": ["train"]}).to_parquet(
+        split_path, index=False
+    )
+
+    first_hash, first_inventory, first_inventory_hash = namespace[
+        "derive_source_dataset_identity"
+    ](tmp_path, manifest_hashes, people)
+    changed_path = tmp_path / "prepared__people__source-0.parquet"
+    changed = pd.read_parquet(changed_path)
+    changed["value"] = 99.0
+    changed.to_parquet(changed_path, index=False)
+    second_hash, second_inventory, second_inventory_hash = namespace[
+        "derive_source_dataset_identity"
+    ](tmp_path, manifest_hashes, people)
+
+    assert first_hash != second_hash
+    assert first_inventory_hash != second_inventory_hash
+    assert first_inventory[0]["sha256"] != second_inventory[0]["sha256"]
+    assert first_inventory[0]["row_count"] == second_inventory[0]["row_count"] == 1
+    assert first_inventory[0]["schema_fingerprint"] == second_inventory[0][
+        "schema_fingerprint"
+    ]
+
+
+def test_source_dataset_identity_changes_for_row_count_and_schema_mutation(
+    tmp_path: Path,
+) -> None:
+    """Prepared row-count and schema changes cannot retain a prior source identity."""
+    namespace = ml_data_namespace()
+    people = _write_physical_prepared_fixture(tmp_path)
+    manifest_hashes = {
+        "prepared__manifest.json": "a" * 64,
+        "outcomes__manifest.json": "b" * 64,
+        "registry__manifest.json": "c" * 64,
+    }
+    pd.DataFrame({"person_key": ["train-00"], "split_role": ["train"]}).to_parquet(
+        tmp_path / "registry__splits.parquet", index=False
+    )
+    original_hash, original_inventory, _ = namespace["derive_source_dataset_identity"](
+        tmp_path, manifest_hashes, people
+    )
+    path = tmp_path / "prepared__people__source-0.parquet"
+    changed = pd.read_parquet(path)
+    changed = pd.concat([changed, changed], ignore_index=True)
+    changed["new_column"] = 1
+    changed.to_parquet(path, index=False)
+
+    changed_hash, changed_inventory, _ = namespace["derive_source_dataset_identity"](
+        tmp_path, manifest_hashes, people
+    )
+
+    assert changed_hash != original_hash
+    assert changed_inventory[0]["row_count"] == 2
+    assert changed_inventory[0]["row_count"] != original_inventory[0]["row_count"]
+    assert changed_inventory[0]["schema_fingerprint"] != original_inventory[0][
+        "schema_fingerprint"
+    ]
+
+
+def test_verified_full_timeline_rejects_physical_row_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    """Manifest flags cannot hide a truncated full timeline."""
+    namespace = dl_sequence_namespace()
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    views_root = tmp_path / "views"
+    views_root.mkdir()
+    _write_strict_ml_views(views_root, namespace, source_hash, split_hash)
+    manifest_path = views_root / "view_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["dl_timeline_files"]["train"]["row_count"] += 1
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="row count"):
+        namespace["_verified_role_views"](views_root, flat_root)
+
+
+def test_verified_full_timeline_rejects_source_binding_swap(
+    tmp_path: Path,
+) -> None:
+    """Preserving row counts and ID sets cannot hide person-to-source swaps."""
+    namespace = dl_sequence_namespace()
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    views_root = tmp_path / "views"
+    views_root.mkdir()
+    _write_strict_ml_views(views_root, namespace, source_hash, split_hash)
+    manifest_path = views_root / "view_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    train_path = views_root / manifest["dl_timeline_files"]["train"]["path"]
+    train = pd.read_parquet(train_path)
+    first_id, second_id = train.loc[0, "dataset_id"], train.loc[1, "dataset_id"]
+    train.loc[0, "dataset_id"] = second_id
+    train.loc[1, "dataset_id"] = first_id
+    train.to_parquet(train_path, index=False, row_group_size=1)
+    manifest["dl_timeline_files"]["train"]["sha256"] = hashlib.sha256(
+        train_path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="binding"):
+        namespace["_verified_role_views"](views_root, flat_root)
+
+
+def test_make_causal_window_index_is_vectorized_and_matches_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A causal index must not perform a Series.diff scan once per endpoint."""
+    namespace = dl_sequence_namespace()
+    namespace["SEQUENCE_LENGTHS_SECONDS"] = (3,)
+    frame = _sequence_source_frame()
+    frame.loc[2, "missing_block"] = True
+    expected_times = {
+        frame.loc[5, "canonical_time"],
+        frame.loc[6, "canonical_time"],
+        frame.loc[7, "canonical_time"],
+    }
+
+    def reject_series_diff(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("endpoint window scans must not call Series.diff")
+
+    monkeypatch.setattr(pd.Series, "diff", reject_series_diff)
+    index = namespace["make_causal_window_index"](frame, length_seconds=3)
+
+    assert set(index["prediction_time"]) == expected_times
+
+
+def test_train_sampler_removes_sqlite_when_connect_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A database path created before sqlite connect must still be removed."""
+    namespace = dl_sequence_namespace()
+
+    def fail_connect(path: Any) -> Any:
+        raise RuntimeError("injected connect failure")
+
+    monkeypatch.setattr(namespace["sqlite3"], "connect", fail_connect)
+    with pytest.raises(RuntimeError, match="connect"):
+        namespace["_sample_train_index_file"](
+            tmp_path / "raw.parquet",
+            tmp_path / "output.parquet",
+            temporary_directory=tmp_path,
+        )
+
+    assert not list(tmp_path.glob("goal15-train-sampling-*.sqlite"))
+    assert not (tmp_path / "output.parquet").exists()
+
+
+def test_train_sampler_cleanup_continues_after_connection_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Connection close failure must not prevent sqlite temp unlink."""
+    namespace = dl_sequence_namespace()
+    empty = namespace["_sequence_index_table"](pd.DataFrame())
+    raw_path = tmp_path / "raw.parquet"
+    namespace["pq"].write_table(empty, raw_path)
+    real_connect = namespace["sqlite3"].connect
+
+    class CloseFailingConnection:
+        def __init__(self, path: Path) -> None:
+            self._connection = real_connect(path)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._connection, name)
+
+        def close(self) -> None:
+            self._connection.close()
+            raise RuntimeError("injected connection close failure")
+
+    monkeypatch.setattr(
+        namespace["sqlite3"], "connect", lambda path: CloseFailingConnection(path)
+    )
+    with pytest.raises(RuntimeError, match="connection close"):
+        namespace["_sample_train_index_file"](
+            raw_path,
+            tmp_path / "output.parquet",
+            temporary_directory=tmp_path,
+        )
+
+    assert not list(tmp_path.glob("goal15-train-sampling-*.sqlite"))
+    assert not (tmp_path / "output.parquet").exists()
+
+
+@pytest.mark.parametrize("failure_stage", ["create", "write"])
+def test_train_sampler_cleanup_handles_writer_creation_and_write_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    """Writer setup/write failures must close later resources and remove partial output."""
+    namespace = dl_sequence_namespace()
+    empty = namespace["_sequence_index_table"](pd.DataFrame())
+    raw_path = tmp_path / "raw.parquet"
+    namespace["pq"].write_table(empty, raw_path)
+    real_writer = namespace["pq"].ParquetWriter
+
+    class StageFailingWriter:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            if failure_stage == "create":
+                raise RuntimeError("injected writer create failure")
+            self._writer = real_writer(*args, **kwargs)
+
+        def write_table(self, table: Any) -> None:
+            if failure_stage == "write":
+                raise RuntimeError("injected writer write failure")
+            self._writer.write_table(table)
+
+        def close(self) -> None:
+            self._writer.close()
+
+    monkeypatch.setattr(namespace["pq"], "ParquetWriter", StageFailingWriter)
+    with pytest.raises(RuntimeError, match=failure_stage):
+        namespace["_sample_train_index_file"](
+            raw_path,
+            tmp_path / "output.parquet",
+            temporary_directory=tmp_path,
+        )
+
+    assert not list(tmp_path.glob("goal15-train-sampling-*.sqlite"))
+    assert not (tmp_path / "output.parquet").exists()
+
+
+def test_sequence_build_unlinks_raw_spools_after_outer_writer_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A build-level writer close failure must not strand raw train spools."""
+    namespace = dl_sequence_namespace()
+    flat_root = tmp_path / "flat"
+    source_hash, split_hash = _write_flat_identity_fixture(flat_root)
+    views_root = tmp_path / "views"
+    views_root.mkdir()
+    _write_strict_ml_views(views_root, namespace, source_hash, split_hash)
+    output_root = tmp_path / "output"
+    real_writer = namespace["pq"].ParquetWriter
+
+    class CloseFailingWriter:
+        failed = False
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._writer = real_writer(*args, **kwargs)
+
+        def write_table(self, table: Any) -> None:
+            self._writer.write_table(table)
+
+        def close(self) -> None:
+            self._writer.close()
+            if not CloseFailingWriter.failed:
+                CloseFailingWriter.failed = True
+                raise RuntimeError("injected build writer close failure")
+
+    monkeypatch.setattr(namespace["pq"], "ParquetWriter", CloseFailingWriter)
+    with pytest.raises(RuntimeError, match="build writer close"):
+        namespace["build_all_sequence_indexes"](
+            flat_dataset_root=flat_root,
+            ml_view_root=views_root,
+            output_root=output_root,
+        )
+
+    assert not list(output_root.glob("goal15-train_*.parquet"))
+
+
+def test_train_sampler_cleanup_continues_after_writer_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Writer close failure must not prevent database close or temp unlink."""
+    namespace = dl_sequence_namespace()
+    empty = namespace["_sequence_index_table"](pd.DataFrame())
+    raw_path = tmp_path / "raw.parquet"
+    namespace["pq"].write_table(empty, raw_path)
+    real_writer = namespace["pq"].ParquetWriter
+
+    class CloseFailingWriter:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._writer = real_writer(*args, **kwargs)
+
+        def write_table(self, table: Any) -> None:
+            self._writer.write_table(table)
+
+        def close(self) -> None:
+            self._writer.close()
+            raise RuntimeError("injected writer close failure")
+
+    monkeypatch.setattr(namespace["pq"], "ParquetWriter", CloseFailingWriter)
+    with pytest.raises(RuntimeError, match="writer close"):
+        namespace["_sample_train_index_file"](
+            raw_path,
+            tmp_path / "output.parquet",
+            temporary_directory=tmp_path,
+        )
+
+    assert not list(tmp_path.glob("goal15-train-sampling-*.sqlite"))
+    assert not (tmp_path / "output.parquet").exists()
