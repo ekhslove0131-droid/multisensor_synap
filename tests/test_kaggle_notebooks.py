@@ -3393,7 +3393,8 @@ def test_dl_tcn_uses_torchrun_ddp_amp_and_deterministic_sampler() -> None:
 
     assert all(name in setup_source for name in ("LOCAL_RANK", "RANK", "WORLD_SIZE", "nccl"))
     assert "DistributedDataParallel" in runner_source
-    assert "DistributedSampler" in runner_source
+    assert "PersonBlockBatchSampler" in runner_source
+    assert "DistributedSampler(" not in runner_source
     assert "set_epoch" in train_source
     assert "autocast" in train_source
     assert "GradScaler" in runner_source
@@ -3490,7 +3491,7 @@ def test_dl_tcn_common_outputs_and_selection_are_validation_only() -> None:
     validate_person_shard = ast.get_source_segment(
         source, _named_definition(tree, "_validate_person_prediction_rows")
     ) or ""
-    assert "select_validation_threshold" in aggregate_shards
+    assert "select_clean_validation_threshold" in aggregate_shards
     assert (
         "drop_duplicates" in runner
         or "prediction window coverage is duplicate" in validate_person_shard
@@ -3650,14 +3651,22 @@ def test_dl_tcn_complete_metrics_stress_and_comparison_contract() -> None:
         source, _named_definition(tree, "write_validation_model_comparison")
     ) or ""
 
-    assert "bootstrap_people_ci" in metric_source
-    assert "forecast_lead" in metric_source
-    assert "per_stage_recall" in metric_source
-    assert "confusion_matrix" in metric_source
-    assert "behavior_micro_auroc" in metric_source
-    assert "behavior_micro_f1" in metric_source
-    assert "positive_support" in metric_source
-    assert "verify_metric_identity" in comparison
+    aggregate = ast.get_source_segment(
+        source, _named_definition(tree, "aggregate_prediction_shards")
+    ) or ""
+    bootstrap = ast.get_source_segment(
+        source, _named_definition(tree, "bootstrap_person_metrics")
+    ) or ""
+    metric_owner = metric_source + aggregate + bootstrap
+    assert "bootstrap_person_metrics" in metric_owner
+    assert "forecast_lead" in metric_owner
+    assert "global_stage_recall" in metric_owner
+    assert "confusion_frames" in metric_owner
+    assert "behavior_micro_auroc" in metric_owner
+    assert "behavior_micro_f1" in metric_owner
+    assert "global_positive_support" in metric_owner
+    assert "source_dataset_hash" in comparison
+    assert "file_sha256" in comparison
     assert "one_to_one" in comparison
     assert "RUN_VALIDATION_COMPARISON" in source
 
@@ -3695,3 +3704,291 @@ def test_dl_tcn_train_only_weights_and_global_ddp_conditional_means() -> None:
     assert "valid_counts" in train_source
     assert runner_source.count("set_epoch") == 0
     assert "SEQUENCE_LENGTH_CANDIDATE = 600" in source
+
+
+def test_round3_metric_rows_have_one_owner_and_unique_export_grain() -> None:
+    """Streaming aggregation alone owns bootstrap and exported metric keys."""
+    source, tree = _dl_tcn_ast()
+    metric_source = ast.get_source_segment(
+        source, _named_definition(tree, "compute_metrics_from_predictions")
+    ) or ""
+    aggregate_source = ast.get_source_segment(
+        source, _named_definition(tree, "aggregate_prediction_shards")
+    ) or ""
+    unique_source = ast.get_source_segment(
+        source, _named_definition(tree, "assert_unique_metric_rows")
+    ) or ""
+
+    assert "bootstrap_people_ci" not in metric_source
+    assert "window_id" in aggregate_source
+    assert "audit_event_binary" in aggregate_source
+    assert "compute_stage_confusion_rows(person)" in aggregate_source
+    assert "stress_condition" in unique_source
+    assert "duplicated" in unique_source
+    assert "assert_unique_metric_rows" in aggregate_source
+
+
+def test_round3_threshold_modes_are_clean_only_and_hash_bound() -> None:
+    """Stress and locked evaluation can only consume a persisted clean threshold."""
+    source, tree = _dl_tcn_ast()
+    selector = ast.get_source_segment(
+        source, _named_definition(tree, "select_clean_validation_threshold")
+    ) or ""
+    fixed = ast.get_source_segment(
+        source, _named_definition(tree, "load_fixed_threshold")
+    ) or ""
+    aggregate = ast.get_source_segment(
+        source, _named_definition(tree, "aggregate_prediction_shards")
+    ) or ""
+    stress = ast.get_source_segment(
+        source, _named_definition(tree, "evaluate_noise_stress_to_shards")
+    ) or ""
+    runner = ast.get_source_segment(
+        source, _named_definition(tree, "run_dl_training")
+    ) or ""
+
+    assert "select_clean_validation" in selector
+    assert "event_level_f1" in selector
+    assert "event_recall" in selector
+    assert "false_alerts_per_hour" in selector
+    assert "THRESHOLD_GRID_SIZE" in selector
+    assert "fixed_threshold" in fixed
+    assert "sha256_file" in fixed
+    assert "threshold_mode" in aggregate
+    assert "select_clean_validation" in aggregate
+    assert "fixed_threshold" in aggregate
+    assert "threshold_artifact" in stress
+    assert "threshold_artifact" in runner
+
+
+def test_round3_global_and_macro_metrics_use_bounded_sufficient_statistics() -> None:
+    """Nonlinear global metrics are not means of per-person scalar metrics."""
+    source, tree = _dl_tcn_ast()
+    accumulator = ast.get_source_segment(
+        source, _named_definition(tree, "StreamingMetricAccumulator")
+    ) or ""
+    aggregate = ast.get_source_segment(
+        source, _named_definition(tree, "aggregate_prediction_shards")
+    ) or ""
+
+    for token in (
+        "brier_sum",
+        "probability_sum",
+        "global_aucpr",
+        "global_auroc",
+        "global_row_f1",
+        "global_ece",
+    ):
+        assert token in accumulator
+    assert "person_macro_f1" in aggregate
+    assert "stage_macro_f1" in aggregate
+    assert "confusion_frames" in aggregate
+    assert "metric_frames" not in aggregate
+
+
+def test_round3_row_group_cache_is_bounded_and_reuses_adjacent_reads() -> None:
+    """Adjacent windows reuse one row group and cache eviction is bounded."""
+    source, tree = _dl_tcn_ast()
+    cache_node = _named_definition(tree, "BoundedRowGroupCache")
+    cache_source = ast.get_source_segment(source, cache_node) or ""
+    namespace: dict[str, Any] = {
+        "OrderedDict": __import__("collections").OrderedDict,
+        "Any": Any,
+        "pd": pd,
+    }
+    exec(cache_source, namespace)
+    cache = namespace["BoundedRowGroupCache"](max_groups=2, max_bytes=10_000)
+    reads: list[int] = []
+
+    def load(group: int) -> pd.DataFrame:
+        reads.append(group)
+        return pd.DataFrame({"value": np.arange(16) + group})
+
+    for _ in range(20):
+        cache.get(0, lambda: load(0))
+    cache.get(1, lambda: load(1))
+    cache.get(2, lambda: load(2))
+    cache.get(0, lambda: load(0))
+
+    assert reads.count(0) == 2
+    assert reads.count(1) == 1
+    assert reads.count(2) == 1
+    assert cache.current_groups <= 2
+    assert cache.current_bytes <= 10_000
+
+
+def test_round3_dataset_uses_interval_index_and_person_local_block_batches() -> None:
+    """Training IO stays row-group local without a global random window sampler."""
+    source, tree = _dl_tcn_ast()
+    dataset = ast.get_source_segment(
+        source, _named_definition(tree, "Goal15SequenceDataset")
+    ) or ""
+    interval = ast.get_source_segment(
+        source, _named_definition(tree, "RowGroupIntervalIndex")
+    ) or ""
+    sampler = ast.get_source_segment(
+        source, _named_definition(tree, "PersonBlockBatchSampler")
+    ) or ""
+    runner = ast.get_source_segment(
+        source, _named_definition(tree, "run_dl_training")
+    ) or ""
+
+    assert "metadata.row_group" in interval
+    assert "BoundedRowGroupCache" in dataset
+    assert "read_row_group" in dataset
+    assert "TIMELINE_READ_COLUMNS" in dataset
+    assert "canonical_time contiguous" in sampler
+    assert "set_epoch" in sampler
+    assert "rank" in sampler
+    assert "batch_sampler=train_batch_sampler" in runner
+    assert "DistributedSampler(" not in runner
+
+    class FakeSamplerBase:
+        @classmethod
+        def __class_getitem__(cls, item: Any) -> type[FakeSamplerBase]:
+            _ = item
+            return cls
+
+    sampler_namespace: dict[str, Any] = {
+        "Sampler": FakeSamplerBase,
+        "Goal15SequenceDataset": Any,
+        "hashlib": hashlib,
+        "np": np,
+    }
+    exec(sampler, sampler_namespace)
+
+    class FakeDataset:
+        def person_ranges(self) -> dict[str, list[range]]:
+            return {"person-a": [range(0, 5)], "person-b": [range(5, 9)]}
+
+    sampler_class = sampler_namespace["PersonBlockBatchSampler"]
+    rank_zero = sampler_class(
+        FakeDataset(), batch_size=4, rank=0, num_replicas=2, seed=17
+    )
+    rank_one = sampler_class(
+        FakeDataset(), batch_size=4, rank=1, num_replicas=2, seed=17
+    )
+    batches_zero = list(rank_zero)
+    batches_one = list(rank_one)
+    indices_zero = {index for batch in batches_zero for index in batch}
+    indices_one = {index for batch in batches_one for index in batch}
+
+    assert len(batches_zero) == len(rank_zero)
+    assert len(batches_one) == len(rank_one)
+    assert len(batches_zero) == len(batches_one)
+    assert not indices_zero & indices_one
+    assert indices_zero | indices_one == set(range(9))
+    assert all(
+        batch == list(range(batch[0], batch[-1] + 1))
+        for batch in [*batches_zero, *batches_one]
+    )
+
+
+def test_round3_ml_champion_artifact_is_identity_safe_and_one_to_one() -> None:
+    """ML exports one validation champion on the common grid for DL comparison."""
+    ml_source = code_cell_source(
+        load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
+    )
+    dl_source, dl_tree = _dl_tcn_ast()
+    discovery = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "discover_ml_champion_artifact")
+    ) or ""
+    comparison = ast.get_source_segment(
+        dl_source, _named_definition(dl_tree, "write_validation_model_comparison")
+    ) or ""
+
+    assert "COMMON_THRESHOLD_GRID_SIZE" in ml_source
+    assert "write_validation_champion_artifact" in ml_source
+    assert "validation_champion_metrics.parquet" in ml_source
+    for token in (
+        "source_dataset_hash",
+        "split_hash",
+        "label_schema_hash",
+        "feature_schema_hash",
+        "threshold",
+        "model_name",
+        "target",
+        "file_sha256",
+    ):
+        assert token in ml_source
+        assert token in discovery or token in comparison
+    assert "sha256_file" in discovery
+    assert "validate='one_to_one'" in comparison
+    assert "locked_test" in comparison
+
+
+def test_round3_physical_audit_is_fail_closed_and_checks_exact_person_sets() -> None:
+    """Mutable manifests cannot replace physical source and exact split audits."""
+    source, tree = _dl_tcn_ast()
+    verify = ast.get_source_segment(
+        source, _named_definition(tree, "verify_sequence_inputs")
+    ) or ""
+    inventory = ast.get_source_segment(
+        source, _named_definition(tree, "verify_declared_physical_inventory")
+    ) or ""
+    people = ast.get_source_segment(
+        source, _named_definition(tree, "verify_exact_sequence_person_sets")
+    ) or ""
+
+    assert "RECOMPUTE_NORMALIZATION = True" in source
+    for token in ("outcome", "registry", "personal_baseline", "prepared"):
+        assert token in inventory
+    assert "sha256_file" in inventory
+    assert "schema" in inventory
+    assert "row_count" in inventory
+    assert "verify_declared_physical_inventory" in verify
+    assert "train_300" in people
+    assert "validation_600" in people
+    assert "locked_test_600" in people
+    assert "EXPECTED_SPLIT_COUNTS" in people
+    assert "verify_exact_sequence_person_sets" in verify
+
+
+def test_round3_person_shard_semantics_match_expected_index_rows() -> None:
+    """Each person shard exactly matches index identities and conditional heads."""
+    source, tree = _dl_tcn_ast()
+    semantic = ast.get_source_segment(
+        source, _named_definition(tree, "validate_person_shard_semantics")
+    ) or ""
+    aggregate = ast.get_source_segment(
+        source, _named_definition(tree, "aggregate_prediction_shards")
+    ) or ""
+
+    assert "expected_person_windows" in semantic
+    assert "one pattern row per expected window" in semantic
+    assert "set(STAGE_CODES)" in semantic
+    assert "set(BEHAVIOR_CODES)" in semantic
+    assert "decision_mask" in semantic
+    for token in (
+        "dataset_id",
+        "run_id",
+        "person_key",
+        "window_id",
+        "canonical_time",
+        "split_role",
+    ):
+        assert token in semantic
+    assert "validate_person_shard_semantics" in aggregate
+
+
+def test_round3_bootstrap_and_sequence_policy_are_explicit() -> None:
+    """Bootstrap recomputes person-grouped metrics; the candidate is fixed at 600s."""
+    source, tree = _dl_tcn_ast()
+    bootstrap = ast.get_source_segment(
+        source, _named_definition(tree, "bootstrap_person_metrics")
+    ) or ""
+    aggregate = ast.get_source_segment(
+        source, _named_definition(tree, "aggregate_prediction_shards")
+    ) or ""
+
+    for token in (
+        "global_aucpr_ci_lower",
+        "global_event_recall_ci_lower",
+        "global_false_alerts_per_hour_ci_upper",
+        "person_macro_f1_ci_lower",
+    ):
+        assert token in bootstrap or token in aggregate
+    assert "person_sufficient_statistics" in bootstrap
+    assert "SEQUENCE_LENGTH_CANDIDATE = 600" in source
+    assert "SEQUENCE_LENGTH_POLICY" in source
+    assert "future comparison" in source
