@@ -25,3 +25,9 @@ knime/exports/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+kaggle/.ipynb_checkpoints/
+kaggle/cache/
+kaggle/checkpoints/
+kaggle/wandb/
+kaggle/staging/
+wandb/
