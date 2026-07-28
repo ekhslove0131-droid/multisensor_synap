@@ -6,6 +6,7 @@ import ast
 import hashlib
 import json
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -73,11 +74,7 @@ def code_cell_source(notebook: dict[str, Any]) -> str:
     for cell in notebook["cells"]:
         if cell["cell_type"] != "code":
             continue
-        source = cell.get("source")
-        if isinstance(source, list):
-            sources.append("\n".join(source))
-        elif isinstance(source, str):
-            sources.append(source)
+        sources.append(normalize_cell_source(cell.get("source")))
     return "\n".join(sources)
 
 
@@ -87,7 +84,7 @@ def ml_data_namespace() -> dict[str, Any]:
     for cell in notebook["cells"]:
         source = normalize_cell_source(cell.get("source"))
         if cell["cell_type"] == "code" and "if RUN_DATA_PREPARATION:" not in source:
-            safe_cells.append("\n".join(cell["source"]))
+            safe_cells.append(source)
     namespace: dict[str, Any] = {}
     exec("\n".join(safe_cells), namespace)
     return namespace
@@ -107,9 +104,76 @@ def dl_sequence_namespace() -> dict[str, Any]:
     for cell in notebook["cells"]:
         source = normalize_cell_source(cell.get("source"))
         if cell["cell_type"] == "code" and "RUN_DATA_PREPARATION = False" not in source:
-            safe_cells.append("\n".join(cell["source"]))
+            safe_cells.append(source)
     namespace: dict[str, Any] = {}
     exec("\n".join(safe_cells), namespace)
+    return namespace
+
+
+def dl_tcn_namespace() -> dict[str, Any]:
+    """Load only the standalone attachment resolvers without importing torch."""
+    notebook = load_notebooks()[KAGGLE_DIR / "04_dl_tcn_benchmark.ipynb"]
+    source = code_cell_source(notebook)
+    tree = ast.parse(source)
+    required_definitions = (
+        "sha256_file",
+        "_require_sha256",
+        "AttachedGoal15Inputs",
+        "AttachedMLChampion",
+        "_manifest_candidates",
+        "_sequence_endpoint_coverage_hash",
+        "_verify_attached_training_pair",
+        "_physical_split_assignments",
+        "recompute_physical_dataset_identity",
+        "_metric_identity_hashes",
+        "discover_attached_goal15_inputs",
+        "discover_ml_champion_artifact",
+    )
+    definitions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+    }
+    selected_source = "\n\n".join(
+        ast.get_source_segment(source, definitions[name]) or ""
+        for name in required_definitions
+    )
+    sequence_namespace = dl_sequence_namespace()
+    namespace: dict[str, Any] = {
+        "Any": Any,
+        "Path": Path,
+        "dataclass": dataclass,
+        "hashlib": hashlib,
+        "json": json,
+        "pa": pa,
+        "pd": pd,
+        "pq": pq,
+        "SERIES_ID": sequence_namespace["SERIES_ID"],
+        "EXPECTED_SPLIT_COUNTS": sequence_namespace["EXPECTED_SPLIT_COUNTS"],
+        "DATA_STATUS": sequence_namespace["DATA_STATUS"],
+        "SEQUENCE_LENGTHS_SECONDS": sequence_namespace[
+            "SEQUENCE_LENGTHS_SECONDS"
+        ],
+        "PATTERN_TARGET": sequence_namespace["PATTERN_TARGET"],
+        "ONSET_EVENT_TARGET": sequence_namespace["ONSET_EVENT_TARGET"],
+        "STAGE_CODES": tuple(
+            stage
+            for stage in sequence_namespace["STAGE_CODES"]
+            if stage != "NO_EVENT"
+        ),
+        "BEHAVIOR_CODES": sequence_namespace["BEHAVIOR_CODES"],
+        "ALLOWED_FEATURE_COLUMNS": sequence_namespace[
+            "ALLOWED_FEATURE_COLUMNS"
+        ],
+        "ATTACHED_INPUT_ROOT": Path("/kaggle/input"),
+    }
+    exec(selected_source, namespace)
+    namespace["AttachedGoal15Inputs"] = dataclass(frozen=True)(
+        namespace["AttachedGoal15Inputs"]
+    )
+    namespace["AttachedMLChampion"] = dataclass(frozen=True)(
+        namespace["AttachedMLChampion"]
+    )
     return namespace
 
 
@@ -252,6 +316,33 @@ def test_notebooks_are_unexecuted() -> None:
                 assert cell["outputs"] == []
 
 
+def test_code_cell_source_uses_exact_jupyter_list_semantics() -> None:
+    notebook = {
+        "cells": [
+            {
+                "cell_type": "code",
+                "source": ["first = 1", "second = 2"],
+            }
+        ]
+    }
+
+    assert code_cell_source(notebook) == "first = 1second = 2"
+    with pytest.raises(SyntaxError):
+        compile(code_cell_source(notebook), "newline-less-list.ipynb", "exec")
+
+
+def test_every_raw_notebook_code_cell_compiles_with_jupyter_semantics() -> None:
+    for path, notebook in load_notebooks().items():
+        for cell_index, cell in enumerate(notebook["cells"]):
+            if cell["cell_type"] != "code":
+                continue
+            compile(
+                normalize_cell_source(cell.get("source")),
+                f"{path}:cell-{cell_index}",
+                "exec",
+            )
+
+
 def test_notebooks_do_not_embed_secrets() -> None:
     forbidden = ("wandb.ai/authorize", "kaggle.json", "api_key=", "WANDB_API_KEY=")
     for path, notebook in load_notebooks().items():
@@ -344,6 +435,7 @@ def test_build_ml_role_view_keeps_id_and_type_hard_negatives_and_caps_baselines(
             "person_key": ["train"] * 10,
             "run_id": ["run"] * 10,
             "person_id": ["train"] * 10,
+            "context": ["focused_task"] * 10,
             "canonical_time": list(range(10)),
             "feature": list(range(10)),
         }
@@ -370,6 +462,205 @@ def test_build_ml_role_view_keeps_id_and_type_hard_negatives_and_caps_baselines(
     )
 
 
+def test_ml_matched_baselines_are_capped_inside_exact_person_run_context_strata() -> None:
+    namespace = ml_data_namespace()
+    namespace["EXPECTED_SPLIT_COUNTS"] = {
+        "train": 2,
+        "validation": 1,
+        "locked_test": 1,
+    }
+    rows: list[dict[str, Any]] = []
+    labels: list[dict[str, Any]] = []
+
+    def add_row(
+        *,
+        person_key: str,
+        run_id: str,
+        context: str,
+        second: int,
+        pattern: bool = False,
+        hard_negative: bool = False,
+        behavior_positive: bool = False,
+    ) -> None:
+        person_id = f"{person_key}-id"
+        timestamp = pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(
+            seconds=second
+        )
+        rows.append(
+            {
+                "person_key": person_key,
+                "run_id": run_id,
+                "person_id": person_id,
+                "context": context,
+                "canonical_time": timestamp,
+                "feature": float(second),
+            }
+        )
+        label = {
+            "run_id": run_id,
+            "person_id": person_id,
+            "canonical_time": timestamp,
+            "event_binary": int(pattern),
+            "hard_negative": int(hard_negative),
+            "stage_code": "LOW" if pattern else "NO_EVENT",
+            **{behavior: 0 for behavior in BEHAVIOR_CODES},
+        }
+        if behavior_positive:
+            label["ear_covering"] = 1
+        labels.append(label)
+
+    add_row(
+        person_key="P1",
+        run_id="run-a",
+        context="focused_task",
+        second=0,
+        pattern=True,
+    )
+    for second in range(1, 7):
+        add_row(
+            person_key="P1",
+            run_id="run-a",
+            context="focused_task",
+            second=second,
+        )
+    add_row(
+        person_key="P1",
+        run_id="run-a",
+        context="focused_task",
+        second=7,
+        hard_negative=True,
+        behavior_positive=True,
+    )
+    for second in range(20, 30):
+        add_row(
+            person_key="P1",
+            run_id="run-a",
+            context="sleep",
+            second=second,
+        )
+    for second in (40, 41):
+        add_row(
+            person_key="P2",
+            run_id="run-b",
+            context="transition",
+            second=second,
+            pattern=True,
+        )
+    for second in range(42, 52):
+        add_row(
+            person_key="P2",
+            run_id="run-b",
+            context="transition",
+            second=second,
+        )
+    add_row(
+        person_key="P2",
+        run_id="run-c",
+        context="wake_rest",
+        second=60,
+        hard_negative=True,
+    )
+    for second in range(61, 66):
+        add_row(
+            person_key="P2",
+            run_id="run-c",
+            context="wake_rest",
+            second=second,
+        )
+
+    prepared = pd.DataFrame(rows)
+    outcome_labels = pd.DataFrame(labels)
+    split = pd.DataFrame(
+        {
+            "person_key": ["P1", "P2"],
+            "split_role": ["train", "train"],
+        }
+    )
+
+    first = namespace["build_ml_role_view"](
+        prepared, outcome_labels, split, "train"
+    )
+    second = namespace["build_ml_role_view"](
+        prepared.sample(frac=1, random_state=91),
+        outcome_labels.sample(frac=1, random_state=73),
+        split,
+        "train",
+    )
+    sort_keys = ["person_key", "run_id", "context", "canonical_time"]
+    pd.testing.assert_frame_equal(
+        first.sort_values(sort_keys).reset_index(drop=True),
+        second.sort_values(sort_keys).reset_index(drop=True),
+    )
+
+    selected = first.groupby(
+        ["person_key", "run_id", "context"], sort=False
+    )
+    assert len(selected.get_group(("P1", "run-a", "focused_task"))) == 5
+    assert len(selected.get_group(("P2", "run-b", "transition"))) == 8
+    assert ("P1", "run-a", "sleep") not in selected.groups
+    assert len(selected.get_group(("P2", "run-c", "wake_rest"))) == 1
+    assert first.loc[
+        first["canonical_time"].eq(
+            pd.Timestamp("2026-01-01T00:00:07Z")
+        ),
+        "ear_covering",
+    ].item() == 1
+
+    off_stratum = prepared.loc[prepared["context"].eq("sleep")]
+    in_stratum = prepared.loc[
+        prepared["context"].eq("focused_task")
+        & prepared["canonical_time"].gt(pd.Timestamp("2026-01-01T00:00:00Z"))
+        & prepared["canonical_time"].lt(pd.Timestamp("2026-01-01T00:00:07Z"))
+    ]
+    off_hashes = namespace["_deterministic_order"](off_stratum)["_sample_hash"]
+    in_hashes = namespace["_deterministic_order"](in_stratum)["_sample_hash"]
+    assert int(off_hashes.min()) < int(in_hashes.max())
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("person_key", " "),
+        ("run_id", "run-a "),
+        ("context", "unknown_context"),
+    ],
+)
+def test_ml_matched_baseline_keys_are_fail_closed(
+    column: str, value: str
+) -> None:
+    namespace = ml_data_namespace()
+    namespace["EXPECTED_SPLIT_COUNTS"] = {
+        "train": 1,
+        "validation": 1,
+        "locked_test": 1,
+    }
+    prepared = pd.DataFrame(
+        {
+            "person_key": ["P1"],
+            "run_id": ["run-a"],
+            "person_id": ["P1-id"],
+            "context": ["focused_task"],
+            "canonical_time": [pd.Timestamp("2026-01-01T00:00:00Z")],
+            "feature": [0.0],
+        }
+    )
+    prepared.loc[0, column] = value
+    labels = complete_multitask_labels(
+        pd.DataFrame(
+            {
+                "run_id": ["run-a"],
+                "person_id": ["P1-id"],
+                "canonical_time": [pd.Timestamp("2026-01-01T00:00:00Z")],
+                "event_binary": [1],
+            }
+        )
+    )
+    split = pd.DataFrame({"person_key": ["P1"], "split_role": ["train"]})
+
+    with pytest.raises(ValueError, match=column):
+        namespace["build_ml_role_view"](prepared, labels, split, "train")
+
+
 @pytest.mark.parametrize("split_role", ["train", "validation", "locked_test"])
 def test_build_ml_role_view_removes_denied_columns_for_every_role(split_role: str) -> None:
     namespace = ml_data_namespace()
@@ -383,6 +674,7 @@ def test_build_ml_role_view_removes_denied_columns_for_every_role(split_role: st
             "person_key": [split_role],
                 "run_id": ["run"],
                 "person_id": [split_role],
+            "context": ["focused_task"],
             "canonical_time": [0],
             "feature": [1.0],
         }
@@ -719,6 +1011,7 @@ def test_build_ml_role_view_preserves_event_boundary_semantics() -> None:
     timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
     prepared = pd.DataFrame({
         "person_key": ["P1", "P1"], "run_id": ["run", "run"], "person_id": ["P1", "P1"],
+        "context": ["sleep", "sleep"],
         "canonical_time": [timestamp, timestamp + pd.Timedelta(seconds=1)],
         "event_binary": [0, 1], "feature": [1.0, 2.0],
     })
@@ -1533,8 +1826,9 @@ def test_write_sequence_manifest_hashes_indexes_and_train_statistics(tmp_path: P
         "train_300": tmp_path / "train_300.parquet",
         "validation_300": tmp_path / "validation_300.parquet",
     }
-    for name, path in index_paths.items():
-        path.write_bytes(name.encode())
+    empty_index = namespace["_sequence_index_table"](pd.DataFrame())
+    for path in index_paths.values():
+        pq.write_table(empty_index, path)
     statistics_path = tmp_path / "train_normalization.json"
     statistics_path.write_text('{"fit_split_role":"train"}\n')
 
@@ -1544,14 +1838,14 @@ def test_write_sequence_manifest_hashes_indexes_and_train_statistics(tmp_path: P
         normalization_path=statistics_path,
         source_dataset_hash="a" * 64,
         split_hash="b" * 64,
-        row_counts={"train_300": 4, "validation_300": 6},
+        row_counts={"train_300": 0, "validation_300": 0},
     )
     manifest = json.loads(manifest_path.read_text())
 
     assert manifest["normalization"]["sha256"] == hashlib.sha256(
         statistics_path.read_bytes()
     ).hexdigest()
-    assert manifest["files"]["train_300"]["row_count"] == 4
+    assert manifest["files"]["train_300"]["row_count"] == 0
     assert manifest["files"]["validation_300"]["sha256"] == hashlib.sha256(
         index_paths["validation_300"].read_bytes()
     ).hexdigest()
@@ -3927,16 +4221,18 @@ def test_round3_ml_champion_artifact_is_identity_safe_and_one_to_one() -> None:
 
     assert "COMMON_THRESHOLD_GRID_SIZE" in ml_source
     assert "write_validation_champion_artifact" in ml_source
+    assert "validation_champion_predictions.manifest.json" in ml_source
     assert "validation_champion_metrics.parquet" in ml_source
     for token in (
         "source_dataset_hash",
         "split_hash",
         "label_schema_hash",
         "feature_schema_hash",
-        "threshold",
+        "endpoint_coverage_hash",
+        "prediction_sha256",
+        "metrics_sha256",
         "model_name",
-        "target",
-        "file_sha256",
+        "targets",
     ):
         assert token in ml_source
         assert token in discovery or token in comparison
@@ -5126,3 +5422,315 @@ def test_round8_ml_comparison_path_preserves_and_validates_segment_identity(
     mismatched["session_id"] = "session-10"
     with pytest.raises(ValueError, match="exact identity mismatch"):
         namespace["validate_window_group_semantics"](mismatched, expected)
+
+
+def _handoff_schema_hashes(feature_columns: tuple[str, ...]) -> tuple[str, str]:
+    label_payload = json.dumps(
+        {
+            "pattern": "pattern_binary",
+            "onset_audit": "event_binary",
+            "stages": ("LOW", "MEDIUM", "HIGH", "DECREASING", "RECOVERY"),
+            "behaviors": BEHAVIOR_CODES,
+        },
+        sort_keys=True,
+    )
+    feature_payload = json.dumps(list(feature_columns), separators=(",", ":"))
+    return (
+        hashlib.sha256(label_payload.encode()).hexdigest(),
+        hashlib.sha256(feature_payload.encode()).hexdigest(),
+    )
+
+
+def _bind_ml_handoff_schema_hashes(
+    view_root: Path, feature_columns: tuple[str, ...]
+) -> tuple[str, str]:
+    label_hash, feature_hash = _handoff_schema_hashes(feature_columns)
+    manifest_path = view_root / "view_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["label_schema_hash"] = label_hash
+    manifest["feature_schema_hash"] = feature_hash
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True))
+    return label_hash, feature_hash
+
+
+def _write_sequence_handoff_fixture(
+    root: Path,
+    namespace: dict[str, Any],
+    *,
+    source_hash: str,
+    split_hash: str,
+    label_hash: str,
+    feature_hash: str,
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    schema = namespace["sequence_index_arrow_schema"]()
+    files: dict[str, dict[str, Any]] = {}
+    coverage_hashes: dict[str, str] = {}
+    empty_coverage_hash = hashlib.sha256(b"").hexdigest()
+    for split_role in ("train", "validation", "locked_test"):
+        for length_seconds in (300, 600):
+            name = f"{split_role}_{length_seconds}"
+            path = root / f"{name}.parquet"
+            pq.write_table(pa.Table.from_batches([], schema=schema), path)
+            files[name] = {
+                "path": path.name,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "row_count": 0,
+                "columns": list(schema.names),
+                "schema_fingerprint": hashlib.sha256(
+                    schema.remove_metadata().serialize().to_pybytes()
+                ).hexdigest(),
+                "endpoint_coverage_hash": empty_coverage_hash,
+            }
+            coverage_hashes[name] = empty_coverage_hash
+    normalization = {
+        "series_id": "mvp3-oracle-v1",
+        "fit_split_role": "train",
+        "source_hash": source_hash,
+        "features": {
+            feature: {"median": 0.0, "iqr": 1.0}
+            for feature in namespace["ALLOWED_FEATURE_COLUMNS"]
+        },
+    }
+    normalization_path = root / "train_normalization.json"
+    normalization_path.write_text(json.dumps(normalization, sort_keys=True))
+    (root / "sequence_manifest.json").write_text(
+        json.dumps(
+            {
+                "series_id": "mvp3-oracle-v1",
+                "data_status": "oracle/sanity",
+                "source_dataset_hash": source_hash,
+                "split_hash": split_hash,
+                "label_schema_hash": label_hash,
+                "feature_schema_hash": feature_hash,
+                "endpoint_coverage_hashes": coverage_hashes,
+                "normalization": {
+                    "path": normalization_path.name,
+                    "sha256": hashlib.sha256(
+                        normalization_path.read_bytes()
+                    ).hexdigest(),
+                },
+                "files": files,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def _write_ml_champion_handoff_fixture(
+    root: Path,
+    *,
+    source_hash: str,
+    split_hash: str,
+    label_hash: str,
+    feature_hash: str,
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    timestamp = pd.Timestamp("2026-01-01T00:10:00Z")
+    targets = [
+        "pattern_binary",
+        *[f"stage::{stage}" for stage in ("LOW", "MEDIUM", "HIGH", "DECREASING", "RECOVERY")],
+        *[f"behavior::{behavior}" for behavior in BEHAVIOR_CODES],
+    ]
+    predictions = pd.DataFrame(
+        [
+            {
+                "model_family": "machine_learning",
+                "model_name": "logistic_regression",
+                "series_id": "mvp3-oracle-v1",
+                "dataset_id": "source-validation-00",
+                "run_id": "run-1",
+                "person_key": "validation-00",
+                "day_key": "2026-01-01",
+                "session_id": "session-1",
+                "canonical_time": timestamp,
+                "split_role": "validation",
+                "target": target,
+                "label": 0,
+                "probability": 0.1,
+                "threshold": 0.5,
+                "target_model_id": f"logistic_regression::{target}",
+            }
+            for target in targets
+        ]
+    )
+    metrics = pd.DataFrame(
+        [
+            {
+                "model_family": "machine_learning",
+                "model_name": "logistic_regression",
+                "series_id": "mvp3-oracle-v1",
+                "split_role": "validation",
+                "target": target,
+                "metric": "aucpr",
+                "value": 0.5,
+                "support": 1,
+                "data_status": "oracle/sanity",
+                "stress_condition": "clean",
+            }
+            for target in targets
+        ]
+    )
+    prediction_path = root / "validation_champion_predictions.parquet"
+    metrics_path = root / "validation_champion_metrics.parquet"
+    predictions.to_parquet(prediction_path, index=False)
+    metrics.to_parquet(metrics_path, index=False)
+    endpoint_payload = (
+        "\x1f".join(
+            map(
+                str,
+                (
+                    "source-validation-00",
+                    "run-1",
+                    "validation-00",
+                    timestamp,
+                ),
+            )
+        )
+        + "\n"
+    )
+    (root / "validation_champion_predictions.manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "goal1.5/ml-validation-champion-predictions/v1",
+                "source_dataset_hash": source_hash,
+                "split_hash": split_hash,
+                "label_schema_hash": label_hash,
+                "feature_schema_hash": feature_hash,
+                "endpoint_coverage_hash": hashlib.sha256(
+                    endpoint_payload.encode()
+                ).hexdigest(),
+                "prediction_sha256": hashlib.sha256(
+                    prediction_path.read_bytes()
+                ).hexdigest(),
+                "metrics_sha256": hashlib.sha256(
+                    metrics_path.read_bytes()
+                ).hexdigest(),
+                "model_family": "machine_learning",
+                "model_name": "logistic_regression",
+                "target_model_ids": sorted(predictions["target_model_id"].unique()),
+                "targets": sorted(targets),
+                "split_role": "validation",
+                "prediction_file": prediction_path.name,
+                "metrics_file": metrics_path.name,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def test_raw_dataset_resolver_is_recursive_unique_and_hash_validated(
+    tmp_path: Path,
+) -> None:
+    namespace = ml_data_namespace()
+    input_root = tmp_path / "input"
+    dataset_root = input_root / "private-raw" / "version-1"
+    dataset_root.mkdir(parents=True)
+    write_manifest_fixture(dataset_root)
+
+    assert namespace["resolve_kaggle_dataset_root"](input_root) == dataset_root
+
+    (dataset_root / "outcomes__outcome_events.parquet").write_text("changed")
+    with pytest.raises(ValueError, match="exactly one"):
+        namespace["resolve_kaggle_dataset_root"](input_root)
+
+
+def test_notebooks_resolve_standalone_attached_handoffs_fail_closed(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "input"
+    working_root = tmp_path / "working"
+    input_root.mkdir()
+    working_root.mkdir()
+    sequence_namespace = dl_sequence_namespace()
+    raw_root = input_root / "raw-dataset"
+    source_hash, split_hash = _write_flat_identity_fixture(raw_root)
+    view_root = input_root / "notebook-01-output"
+    view_root.mkdir()
+    _write_strict_ml_views(view_root, sequence_namespace, source_hash, split_hash)
+    label_hash, feature_hash = _bind_ml_handoff_schema_hashes(
+        view_root, tuple(sequence_namespace["ALLOWED_FEATURE_COLUMNS"])
+    )
+    sequence_root = input_root / "notebook-03-output"
+    _write_sequence_handoff_fixture(
+        sequence_root,
+        sequence_namespace,
+        source_hash=source_hash,
+        split_hash=split_hash,
+        label_hash=label_hash,
+        feature_hash=feature_hash,
+    )
+    champion_root = input_root / "notebook-02-output"
+    _write_ml_champion_handoff_fixture(
+        champion_root,
+        source_hash=source_hash,
+        split_hash=split_hash,
+        label_hash=label_hash,
+        feature_hash=feature_hash,
+    )
+
+    ml_namespace = ml_benchmark_namespace()
+    assert ml_namespace["resolve_ml_view_root"](
+        input_root=input_root,
+        working_root=working_root / "goal15_ml_view",
+    ) == view_root
+    assert sequence_namespace["resolve_ml_view_root"](
+        input_root=input_root,
+        working_root=working_root / "goal15_ml_view",
+    ) == view_root
+    assert sequence_namespace["resolve_flat_dataset_root"](input_root) == raw_root
+
+    tcn_namespace = dl_tcn_namespace()
+    attached = tcn_namespace["discover_attached_goal15_inputs"](root=input_root)
+    assert attached.sequence_root == sequence_root
+    assert attached.timeline_root == view_root
+    assert attached.source_root == raw_root
+    champion = tcn_namespace["discover_ml_champion_artifact"](
+        source_dataset_hash=source_hash,
+        split_hash=split_hash,
+        root=input_root,
+    )
+    assert champion.manifest_path.name == (
+        "validation_champion_predictions.manifest.json"
+    )
+
+    prediction_path = champion_root / "validation_champion_predictions.parquet"
+    prediction_path.write_bytes(prediction_path.read_bytes() + b"changed")
+    with pytest.raises(ValueError, match="exactly one"):
+        tcn_namespace["discover_ml_champion_artifact"](
+            source_dataset_hash=source_hash,
+            split_hash=split_hash,
+            root=input_root,
+        )
+
+    duplicate_root = input_root / "duplicate-notebook-01-output"
+    duplicate_root.mkdir()
+    _write_strict_ml_views(
+        duplicate_root, sequence_namespace, source_hash, split_hash
+    )
+    _bind_ml_handoff_schema_hashes(
+        duplicate_root, tuple(sequence_namespace["ALLOWED_FEATURE_COLUMNS"])
+    )
+    with pytest.raises(ValueError, match="exactly one"):
+        ml_namespace["resolve_ml_view_root"](
+            input_root=input_root,
+            working_root=working_root / "goal15_ml_view",
+        )
+
+
+def test_final_handoff_manifest_name_and_korean_save_version_order_are_explicit() -> None:
+    source, tree = _dl_tcn_ast()
+    discovery = ast.get_source_segment(
+        source, _named_definition(tree, "discover_ml_champion_artifact")
+    ) or ""
+    assert "validation_champion_predictions.manifest.json" in discovery
+    assert "validation_champion_metrics.manifest.json" not in discovery
+
+    for path, notebook in load_notebooks().items():
+        markdown = "\n".join(
+            normalize_cell_source(cell.get("source"))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "markdown"
+        )
+        assert "Save Version" in markdown, path
+        assert "01 → 03 → 02 → 04" in markdown, path
