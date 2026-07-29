@@ -13,7 +13,10 @@
 - Data status remains `oracle/sanity`; real accuracy remains `NOT VERIFIED`.
 - Preserve the person split: train 24, validation 6, locked test 6, overlap 0.
 - Do not use locked-test rows for feature selection, threshold selection, calibration, or champion selection.
-- Do not execute deep-learning notebooks or allocate a GPU in Phase 2.
+- Never run two Kaggle kernels concurrently.
+- Run data preparation and classical ML on CPU. Run the DL benchmark only
+  after its upstream kernels succeed, with `NvidiaTeslaT4`, exactly two CUDA
+  devices, and `torchrun --nproc_per_node=2`.
 - Do not promote a release automatically.
 - Preserve raw probability, threshold, decoded state, dataset hash, split hash, and feature schema hash.
 - Keep truth, audit-only columns, and model features strictly separated.
@@ -438,6 +441,49 @@ not reconstruct from predictions.
 - [ ] **Step 4: Record the evidence and commit**
 
 Do not call either model a final champion. Commit the validation comparison only.
+
+---
+
+### Task 5B: Run the DL Comparison Sequentially on T4 x2
+
+**Files:**
+- Modify staging metadata only for `kaggle/03_dl_sequence_data.ipynb`
+- Modify staging metadata only for `kaggle/04_dl_tcn_benchmark.ipynb`
+- Create: `docs/results/phase2_dl_t4x2_validation.md`
+
+**Interfaces:**
+- Consumes: successful Task 5 ML outputs and the full causal sequence view.
+- Produces: one DL validation comparison; no locked-test execution.
+
+- [ ] **Step 1: Wait for every earlier Kaggle kernel to finish**
+
+Confirm no data or ML kernel is running. Do not start another kernel while one
+is pending.
+
+- [ ] **Step 2: Run sequence preparation on CPU**
+
+Push `03_dl_sequence_data` with GPU disabled and wait for `complete`.
+
+- [ ] **Step 3: Run one T4 x2 DL kernel**
+
+Push `04_dl_tcn_benchmark` with:
+
+```text
+--accelerator NvidiaTeslaT4
+RUN_TRAINING=True
+RUN_LOCKED_TEST=False
+torch.cuda.device_count()==2
+torchrun --nproc_per_node=2
+```
+
+The notebook must fail before training if Kaggle supplies anything other than
+two CUDA devices.
+
+- [ ] **Step 4: Record ML/DL validation evidence**
+
+Record device names/count, runtime, hashes, AUCPR/AUROC, row and event metrics,
+calibration, and stress results. Keep the result `oracle/sanity` and do not
+promote a release.
 
 ---
 
