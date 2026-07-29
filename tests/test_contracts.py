@@ -10,6 +10,7 @@ from multisensor_ml.contracts import (
     ORACLE_LATENT_FACTORS,
     DatasetRecord,
     SynchronizationRecord,
+    ValidationCandidateManifest,
     assert_oracle_columns,
     assign_person_splits,
     build_labels,
@@ -115,4 +116,33 @@ def test_oracle_synchronization_cannot_invent_device_measurements() -> None:
     with pytest.raises(ValueError, match="must not invent"):
         SynchronizationRecord.model_validate(
             {**record.model_dump(), "offset_ms": 3.5}
+        )
+
+
+def test_validation_candidate_manifest_requires_both_candidates() -> None:
+    payload = {
+        "schema_version": "goal1.5/ml-validation-candidates/v1",
+        "split_role": "validation",
+        "locked_test_used": False,
+        "candidate_models": [
+            "hist_gradient_boosting",
+            "logistic_regression",
+        ],
+        "source_dataset_hash": "a" * 64,
+        "split_hash": "b" * 64,
+        "feature_schema_hash": "c" * 64,
+        "row_count": 64,
+        "file": "validation_candidate_metrics.parquet",
+        "file_sha256": "d" * 64,
+    }
+
+    manifest = ValidationCandidateManifest.model_validate(payload)
+
+    assert manifest.locked_test_used is False
+    with pytest.raises(ValueError, match="exactly Logistic and HGB"):
+        ValidationCandidateManifest.model_validate(
+            {
+                **payload,
+                "candidate_models": ["logistic_regression"],
+            }
         )

@@ -91,6 +91,37 @@ class SynchronizationRecord(BaseModel):
         return self
 
 
+class ValidationCandidateManifest(BaseModel):
+    """Immutable identity for the complete clean-validation candidate table."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["goal1.5/ml-validation-candidates/v1"]
+    split_role: Literal["validation"]
+    locked_test_used: Literal[False]
+    candidate_models: tuple[
+        Literal["hist_gradient_boosting", "logistic_regression"],
+        ...,
+    ]
+    source_dataset_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    split_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    feature_schema_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    row_count: int = Field(gt=0)
+    file: Literal["validation_candidate_metrics.parquet"]
+    file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def exactly_two_supported_candidates(self) -> ValidationCandidateManifest:
+        if self.candidate_models != (
+            "hist_gradient_boosting",
+            "logistic_regression",
+        ):
+            raise ValueError(
+                "validation candidate manifest requires exactly Logistic and HGB"
+            )
+        return self
+
+
 def assign_person_splits(people: Iterable[tuple[str, str]]) -> dict[tuple[str, str], SplitRole]:
     """Assign a deterministic 8/2/2 split independently inside each run."""
 

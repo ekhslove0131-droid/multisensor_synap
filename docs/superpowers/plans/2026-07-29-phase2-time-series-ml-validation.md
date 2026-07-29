@@ -303,13 +303,13 @@ Expected: all commands exit 0.
 - Consumes: Logistic and HGB validation prediction frames.
 - Produces: `validation_candidate_metrics.parquet`, `validation_candidate_manifest.json`, and the existing champion artifact.
 
-- [ ] **Step 1: Write failing artifact-contract tests**
+- [x] **Step 1: Write failing artifact-contract tests**
 
 Require exactly two candidate names, one threshold per candidate/target, unique
 `model_name × target × metric × stress_condition`, runtime seconds, row support,
 event count, source dataset hash, split hash, and feature schema hash.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -320,7 +320,7 @@ Run:
 
 Expected: FAIL because v5 writes champion-only metrics.
 
-- [ ] **Step 3: Write candidate metrics before champion filtering**
+- [x] **Step 3: Write candidate metrics before champion filtering**
 
 The manifest must use:
 
@@ -335,12 +335,12 @@ The manifest must use:
 
 Reject overwrite when the manifest hash differs.
 
-- [ ] **Step 4: Verify reload and deterministic champion selection**
+- [x] **Step 4: Verify reload and deterministic champion selection**
 
 Reload the Parquet, select the champion from it, and assert that row order changes
 do not change the selected model or threshold.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run full Ruff, mypy, pytest and commit:
 

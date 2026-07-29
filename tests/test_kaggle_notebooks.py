@@ -1221,6 +1221,7 @@ def test_ml_benchmark_contract() -> None:
         "compute_common_metrics",
         "bootstrap_people_ci",
         "select_validation_champion",
+        "write_validation_candidate_artifact",
         "login_wandb_from_kaggle_secret",
     )
     for definition in expected_definitions:
@@ -1234,6 +1235,149 @@ def test_ml_benchmark_contract() -> None:
     assert "RUN_LOCKED_TEST = False" in source
     assert 'PATTERN_TARGET = "pattern_binary"' in source
     assert 'ONSET_EVENT_TARGET = "event_binary"' in source
+
+
+def test_validation_candidate_metric_artifact_is_complete_and_reusable(
+    tmp_path: Path,
+) -> None:
+    namespace = ml_benchmark_namespace()
+    model_names = ("logistic_regression", "hist_gradient_boosting")
+    predictions = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "model_name": model_name,
+                    "split_role": "validation",
+                    "target": "pattern_binary",
+                    "threshold": 0.5,
+                    "dataset_id": "D1",
+                    "run_id": "R1",
+                    "person_key": "P1",
+                    "day_key": "2026-01-01",
+                    "session_id": "S1",
+                    "canonical_time": pd.date_range(
+                        "2026-01-01",
+                        periods=4,
+                        freq="s",
+                        tz="UTC",
+                    ),
+                    "label": [0, 1, 1, 0],
+                    "probability": [0.1, 0.9, 0.8, 0.2],
+                }
+            )
+            for model_name in model_names
+        ],
+        ignore_index=True,
+    )
+    metrics = pd.DataFrame(
+        [
+            {
+                "model_family": "machine_learning",
+                "model_name": model_name,
+                "series_id": "mvp3-oracle-v1",
+                "split_role": "validation",
+                "target": "pattern_binary",
+                "metric": metric,
+                "value": value,
+                "support": 4,
+                "data_status": "oracle/sanity",
+                "stress_condition": "clean",
+            }
+            for model_name in model_names
+            for metric, value in {
+                "global_aucpr": 0.8,
+                "global_event_recall": 1.0,
+                "global_false_alerts_per_hour": 0.0,
+                "global_ece": 0.1,
+            }.items()
+        ]
+    )
+    manifest_source = {
+        "source_dataset_hash": "a" * 64,
+        "split_hash": "b" * 64,
+    }
+    runtime_seconds = {
+        "logistic_regression": 1.25,
+        "hist_gradient_boosting": 2.5,
+    }
+
+    output_path, manifest_path, status = namespace[
+        "write_validation_candidate_artifact"
+    ](
+        metrics,
+        predictions,
+        feature_columns=["feature_a"],
+        view_manifest=manifest_source,
+        runtime_seconds=runtime_seconds,
+        output_root=tmp_path,
+    )
+    persisted = pd.read_parquet(output_path)
+    manifest = json.loads(manifest_path.read_text())
+
+    assert status == "CREATED"
+    assert manifest["schema_version"] == "goal1.5/ml-validation-candidates/v1"
+    assert manifest["locked_test_used"] is False
+    assert manifest["candidate_models"] == sorted(model_names)
+    assert {
+        "threshold",
+        "runtime_seconds",
+        "row_support",
+        "event_count",
+        "source_dataset_hash",
+        "split_hash",
+        "feature_schema_hash",
+    }.issubset(persisted.columns)
+    assert not persisted.duplicated(
+        ["model_name", "target", "metric", "stress_condition"]
+    ).any()
+    assert namespace["select_validation_champion"](
+        persisted.sample(frac=1, random_state=7).rename(
+            columns={"row_support": "support"}
+        )
+    ) == "hist_gradient_boosting"
+
+    rerun_runtime_seconds = {
+        "logistic_regression": 8.0,
+        "hist_gradient_boosting": 9.0,
+    }
+    _, _, reused = namespace["write_validation_candidate_artifact"](
+        metrics,
+        predictions,
+        feature_columns=["feature_a"],
+        view_manifest=manifest_source,
+        runtime_seconds=rerun_runtime_seconds,
+        output_root=tmp_path,
+    )
+    assert reused == "REUSED"
+
+    changed_source = {**manifest_source, "split_hash": "c" * 64}
+    with pytest.raises(FileExistsError, match="different manifest hash"):
+        namespace["write_validation_candidate_artifact"](
+            metrics,
+            predictions,
+            feature_columns=["feature_a"],
+            view_manifest=changed_source,
+            runtime_seconds=runtime_seconds,
+            output_root=tmp_path,
+        )
+
+
+def test_champion_is_selected_from_reloaded_candidate_artifact() -> None:
+    source = code_cell_source(
+        load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
+    )
+    tree = ast.parse(source)
+    run_source = ast.get_source_segment(
+        source,
+        _named_definition(tree, "run_ml_training"),
+    ) or ""
+
+    write_index = run_source.index("write_validation_candidate_artifact")
+    reload_index = run_source.index("pd.read_parquet(candidate_path)")
+    select_index = run_source.index("select_validation_champion")
+    champion_write_index = run_source.index("write_validation_champion_artifact")
+
+    assert write_index < reload_index < select_index < champion_write_index
 
 
 @pytest.mark.parametrize(
