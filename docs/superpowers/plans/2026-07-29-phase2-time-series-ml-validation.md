@@ -356,13 +356,16 @@ git commit -m "feat: persist Kaggle validation candidates"
 - Modify: `src/multisensor_ml/features.py`
 - Modify: `tests/test_baseline_features.py`
 - Modify: `kaggle/01_ml_data.ipynb`
+- Modify: `kaggle/02_ml_benchmark.ipynb`
+- Modify: `kaggle/03_dl_sequence_data.ipynb` (schema parity only; do not run)
+- Modify: `kaggle/04_dl_tcn_benchmark.ipynb` (schema parity only; do not run)
 - Modify: `tests/test_kaggle_notebooks.py`
 
 **Interfaces:**
 - Consumes: one-Hz person/session timelines and causal baseline values.
 - Produces: lag `1/5/15/30/60s`, rolling `5/15/30/60/180/300s`, delta, slope, and baseline-deviation features.
 
-- [ ] **Step 1: Add future-mutation and boundary tests**
+- [x] **Step 1: Add future-mutation and boundary tests**
 
 For every feature family:
 
@@ -376,21 +379,21 @@ pd.testing.assert_frame_equal(past_before, past_after)
 
 Also assert lags reset at person, dataset, day, session, and time-gap boundaries.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run the new focused tests and confirm at least one gap-reset test fails.
 
-- [ ] **Step 3: Implement explicit segment grouping and gap reset**
+- [x] **Step 3: Implement explicit segment grouping and gap reset**
 
 Use only rows at or before the current timestamp. Never backward-fill a causal
 feature. Add a boolean `history_sufficient` audit column that is not a feature.
 
-- [ ] **Step 4: Prove role parity**
+- [x] **Step 4: Prove role parity**
 
 Train, validation, and locked-test schemas must match exactly while labels,
 audit-only columns, and future values remain excluded.
 
-- [ ] **Step 5: Run full verification and commit**
+- [x] **Step 5: Run full verification and commit**
 
 Commit:
 

@@ -18,6 +18,8 @@ import pyarrow.parquet as pq
 import pytest
 
 from multisensor_ml import metrics as metrics_module
+from multisensor_ml.contracts import ORACLE_LATENT_FACTORS
+from multisensor_ml.features import build_causal_features
 
 KAGGLE_DIR = Path(__file__).parents[1] / "kaggle"
 PROJECT_ROOT = KAGGLE_DIR.parent
@@ -1235,6 +1237,49 @@ def test_ml_benchmark_contract() -> None:
     assert "RUN_LOCKED_TEST = False" in source
     assert 'PATTERN_TARGET = "pattern_binary"' in source
     assert 'ONSET_EVENT_TARGET = "event_binary"' in source
+
+
+def test_package_and_notebooks_share_causal_feature_schema() -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp_utc": pd.date_range(
+                "2026-01-01",
+                periods=3,
+                freq="s",
+                tz="UTC",
+            ),
+            "context": ["wake_rest"] * 3,
+            "is_awake": [True] * 3,
+            **{
+                factor: np.arange(3, dtype=np.float32)
+                for factor in ORACLE_LATENT_FACTORS
+            },
+        }
+    )
+    baseline = pd.DataFrame(
+        {
+            **{
+                f"{factor}__center": [0.0] * 3
+                for factor in ORACLE_LATENT_FACTORS
+            },
+            **{
+                f"{factor}__mad": [1.0] * 3
+                for factor in ORACLE_LATENT_FACTORS
+            },
+        }
+    )
+    _, package_features = build_causal_features(frame, baseline)
+
+    assert tuple(package_features) == tuple(
+        ml_data_namespace()["DL_CAUSAL_FEATURE_COLUMNS"]
+    )
+    assert tuple(package_features) == tuple(
+        ml_benchmark_namespace()["ALLOWED_FEATURE_COLUMNS"]
+    )
+    assert tuple(package_features) == tuple(
+        dl_sequence_namespace()["ALLOWED_FEATURE_COLUMNS"]
+    )
+    assert "history_sufficient" not in package_features
 
 
 def test_validation_candidate_metric_artifact_is_complete_and_reusable(
@@ -3107,6 +3152,31 @@ def test_dl_sequence_allows_audit_columns_but_never_selects_them() -> None:
 
     assert selected == list(namespace["ALLOWED_FEATURE_COLUMNS"])
     assert {"phase", "forecast_60s", "event_binary"}.isdisjoint(selected)
+
+
+def test_history_sufficient_is_audit_only_in_ml_and_sequence_views() -> None:
+    ml_namespace = ml_benchmark_namespace()
+    ml_frame = pd.DataFrame(
+        {
+            feature: pd.Series([0.0], dtype="float32")
+            for feature in ml_namespace["ALLOWED_FEATURE_COLUMNS"]
+        }
+    )
+    ml_frame["history_sufficient"] = True
+
+    assert ml_namespace["_infer_feature_columns"](ml_frame) == list(
+        ml_namespace["ALLOWED_FEATURE_COLUMNS"]
+    )
+
+    sequence_namespace = dl_sequence_namespace()
+    sequence_frame = _strict_sequence_frame(sequence_namespace)
+    sequence_frame["history_sufficient"] = True
+
+    selected = sequence_namespace["validate_sequence_role_frame"](
+        sequence_frame,
+        "train",
+    )
+    assert "history_sufficient" not in selected
 
 
 def test_sequence_temp_spools_are_removed_when_role_validation_fails(
