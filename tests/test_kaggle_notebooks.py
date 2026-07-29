@@ -2823,6 +2823,129 @@ def test_full_dl_timeline_keeps_audit_columns_and_injects_dataset_id() -> None:
     )
 
 
+def test_materialize_causal_history_features_resets_at_segment_boundaries() -> None:
+    namespace = ml_data_namespace()
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    frame = pd.DataFrame(
+        {
+            "dataset_id": ["dataset-1"] * 5,
+            "person_key": ["person-1"] * 5,
+            "day_key": ["2026-01-01"] * 5,
+            "session_id": ["session-1"] * 3 + ["session-2"] * 2,
+            "canonical_time": [
+                start,
+                start + pd.Timedelta(seconds=1),
+                start + pd.Timedelta(seconds=2),
+                start + pd.Timedelta(seconds=10),
+                start + pd.Timedelta(seconds=11),
+            ],
+            **{
+                f"{factor}__robust_z": np.arange(5, dtype=float)
+                for factor in namespace["DL_CAUSAL_FACTORS"]
+            },
+        }
+    )
+
+    result = namespace["materialize_causal_history_features"](frame)
+
+    assert result["autonomic_arousal__lag_1s"].tolist() == [
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        3.0,
+    ]
+    assert result["autonomic_arousal__delta_1s"].tolist() == [
+        0.0,
+        1.0,
+        1.0,
+        0.0,
+        1.0,
+    ]
+    assert not result["history_sufficient"].any()
+
+
+def test_materialize_causal_history_features_is_prefix_invariant() -> None:
+    namespace = ml_data_namespace()
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    values = np.arange(62, dtype=float)
+    frame = pd.DataFrame(
+        {
+            "dataset_id": ["dataset-1"] * len(values),
+            "person_key": ["person-1"] * len(values),
+            "day_key": ["2026-01-01"] * len(values),
+            "session_id": ["session-1"] * len(values),
+            "canonical_time": pd.date_range(start, periods=len(values), freq="s"),
+            **{
+                f"{factor}__robust_z": values.copy()
+                for factor in namespace["DL_CAUSAL_FACTORS"]
+            },
+        }
+    )
+    changed_future = frame.copy()
+    changed_future.loc[61, "autonomic_arousal__robust_z"] = 1_000_000.0
+
+    original = namespace["materialize_causal_history_features"](frame)
+    changed = namespace["materialize_causal_history_features"](changed_future)
+
+    causal_columns = [
+        "autonomic_arousal__lag_1s",
+        "autonomic_arousal__lag_60s",
+        "autonomic_arousal__delta_1s",
+    ]
+    pd.testing.assert_frame_equal(
+        original.loc[:60, causal_columns],
+        changed.loc[:60, causal_columns],
+    )
+    assert original.loc[59, "history_sufficient"] == np.False_
+    assert original.loc[60, "history_sufficient"] == np.True_
+
+
+def test_full_dl_timeline_derives_missing_causal_history_from_legacy_prepared_rows() -> None:
+    namespace = ml_data_namespace()
+    namespace["EXPECTED_SPLIT_COUNTS"] = {"train": 1}
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    prepared = pd.DataFrame(
+        {
+            "person_key": ["P1", "P1"],
+            "run_id": ["run-1", "run-1"],
+            "person_id": ["P1", "P1"],
+            "dataset_id": ["prepared-person-1", "prepared-person-1"],
+            "day_key": ["2026-01-01", "2026-01-01"],
+            "session_id": ["session-1", "session-1"],
+            "canonical_time": [start, start + pd.Timedelta(seconds=1)],
+            "context": ["focused_task", "focused_task"],
+            **{
+                f"{factor}__robust_z": [0.0, 1.0]
+                for factor in namespace["DL_CAUSAL_FACTORS"]
+            },
+        }
+    )
+    labels = complete_multitask_labels(
+        pd.DataFrame(
+            {
+                "run_id": ["run-1", "run-1"],
+                "person_id": ["P1", "P1"],
+                "canonical_time": prepared["canonical_time"],
+                "event_binary": [0, 1],
+            }
+        )
+    )
+    split = pd.DataFrame({"person_key": ["P1"], "split_role": ["train"]})
+
+    view = namespace["build_full_dl_role_view"](
+        prepared,
+        labels,
+        split,
+        "train",
+        dataset_id="prepared-person-1",
+    )
+
+    assert view["autonomic_arousal__lag_1s"].tolist() == [0.0, 0.0]
+    assert view["autonomic_arousal__delta_1s"].tolist() == [0.0, 1.0]
+    assert view["history_sufficient"].tolist() == [False, False]
+
+
 def test_prepared_people_are_streamed_in_sequence_identity_order() -> None:
     """Sorting by opaque dataset filename must not make DL identities reappear."""
     namespace = ml_data_namespace()
