@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from itertools import pairwise
 
 import numpy as np
+import pandas as pd
 from numpy.typing import NDArray
 from sklearn.metrics import (
     average_precision_score,
@@ -11,6 +12,13 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
     recall_score,
+)
+
+EVENT_SEGMENT_KEYS = (
+    "dataset_id",
+    "person_key",
+    "day_key",
+    "session_id",
 )
 
 
@@ -26,9 +34,13 @@ def _event_counts(
     truth: NDArray[np.int8],
     predicted: NDArray[np.bool_],
 ) -> tuple[int, int, int]:
-    truth_events = _segments(truth.astype(bool))
+    truth_mask = truth.astype(bool)
+    truth_events = _segments(truth_mask)
     detected = sum(bool(predicted[start : end + 1].any()) for start, end in truth_events)
-    false_alerts = len(_segments(predicted & ~truth.astype(bool)))
+    false_alerts = sum(
+        not bool(truth_mask[start : end + 1].any())
+        for start, end in _segments(predicted)
+    )
     return detected, len(truth_events) - detected, false_alerts
 
 
@@ -100,6 +112,104 @@ def evaluate_probabilities(
         "calibration_error": expected_calibration_error(truth, probability),
         "confusion_matrix": matrix,
     }
+
+
+def evaluate_segmented_probabilities(
+    frame: pd.DataFrame,
+    *,
+    threshold: float,
+    truth_column: str,
+    probability_column: str,
+) -> dict[str, float | int | list[list[int]]]:
+    required_columns = {
+        *EVENT_SEGMENT_KEYS,
+        "canonical_time",
+        truth_column,
+        probability_column,
+    }
+    missing_columns = sorted(required_columns.difference(frame.columns))
+    if missing_columns:
+        raise ValueError(
+            f"event evaluation requires columns: {missing_columns}"
+        )
+    if frame.loc[:, list(EVENT_SEGMENT_KEYS)].isna().any().any():
+        raise ValueError("event segment identity contains null values")
+    truth_values = frame[truth_column]
+    if (
+        truth_values.isna().any()
+        or not set(truth_values.unique()).issubset({0, 1})
+    ):
+        raise ValueError("truth must contain exact binary values")
+    probability_values = frame[probability_column].to_numpy(dtype=np.float64)
+    if (
+        not np.isfinite(probability_values).all()
+        or (probability_values < 0).any()
+        or (probability_values > 1).any()
+    ):
+        raise ValueError("probability must be finite and within [0, 1]")
+    ordered = frame.sort_values(
+        [*EVENT_SEGMENT_KEYS, "canonical_time"],
+        kind="mergesort",
+    )
+    detected = 0
+    missed = 0
+    false_alerts = 0
+    duration_hours = 0.0
+    for _, segment in ordered.groupby(
+        list(EVENT_SEGMENT_KEYS),
+        sort=False,
+        dropna=False,
+    ):
+        times = pd.to_datetime(segment["canonical_time"], utc=True)
+        if times.duplicated().any():
+            raise ValueError("duplicate canonical_time inside event segment")
+        contiguous_run = times.diff().ne(pd.Timedelta(seconds=1)).cumsum()
+        for _, run in segment.groupby(contiguous_run, sort=False):
+            run_duration = len(run) / 3600
+            run_truth = run[truth_column].to_numpy(dtype=np.int8)
+            run_predicted = (
+                run[probability_column].to_numpy(dtype=np.float64) >= threshold
+            )
+            run_detected, run_missed, run_false_alerts = _event_counts(
+                run_truth,
+                run_predicted,
+            )
+            detected += run_detected
+            missed += run_missed
+            false_alerts += run_false_alerts
+            duration_hours += run_duration
+
+    result = evaluate_probabilities(
+        ordered[truth_column].to_numpy(dtype=np.int8),
+        ordered[probability_column].to_numpy(dtype=np.float64),
+        threshold=threshold,
+        duration_hours=duration_hours,
+    )
+    event_recall = detected / (detected + missed) if detected + missed else 0.0
+    event_precision = (
+        detected / (detected + false_alerts)
+        if detected + false_alerts
+        else 0.0
+    )
+    event_f1 = (
+        2 * event_precision * event_recall / (event_precision + event_recall)
+        if event_precision + event_recall
+        else 0.0
+    )
+    result.update(
+        {
+            "event_recall": event_recall,
+            "event_precision": event_precision,
+            "event_f1": event_f1,
+            "detected_events": detected,
+            "missed_events": missed,
+            "false_alerts": false_alerts,
+            "false_alerts_per_hour": (
+                false_alerts / duration_hours if duration_hours else 0.0
+            ),
+        }
+    )
+    return result
 
 
 def select_event_threshold(

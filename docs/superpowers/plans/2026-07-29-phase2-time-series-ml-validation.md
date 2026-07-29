@@ -36,7 +36,7 @@
 - Consumes: committed Phase 1 design and recorded Oracle/Kaggle results.
 - Produces: one-page Korean HTML report and a source artifact containing the same narrative and metrics.
 
-- [ ] **Step 1: Write the failing artifact-content test**
+- [x] **Step 1: Write the failing artifact-content test**
 
 ```python
 from pathlib import Path
@@ -58,13 +58,13 @@ def test_phase1_report_contains_history_failures_and_phase2_plan() -> None:
     assert required.issubset(set(filter(lambda item: item in html, required)))
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `./.venv/bin/pytest tests/test_phase1_report.py -v`
 
 Expected: FAIL because `reports/goal15_phase1_interim_ko.html` does not exist.
 
-- [ ] **Step 3: Build the canonical report artifact**
+- [x] **Step 3: Build the canonical report artifact**
 
 Create a technical report artifact with these visible sections:
 
@@ -88,7 +88,7 @@ Include a bar chart with the three clean validation summaries:
 ]
 ```
 
-- [ ] **Step 4: Render and verify the self-contained HTML**
+- [x] **Step 4: Render and verify the self-contained HTML**
 
 Run the Data Analytics report validator, then package:
 
@@ -100,7 +100,7 @@ npm run report:deliver -- \
 
 Expected: validation and delivery succeed; HTML contains no external data dependency.
 
-- [ ] **Step 5: Run report tests and commit**
+- [x] **Step 5: Run report tests and commit**
 
 Run:
 
@@ -126,19 +126,19 @@ Expected: PASS and one focused report commit.
 - Consumes: ordered rows with `dataset_id`, `person_key`, `day_key`, `session_id`, `canonical_time`, truth, and probability.
 - Produces: `evaluate_segmented_probabilities(frame, *, threshold, truth_column, probability_column) -> dict[str, float | int | list[list[int]]]`.
 
-- [ ] **Step 1: Write failing metric invariants**
+- [x] **Step 1: Write failing metric invariants**
 
 Add tests that prove:
 
 ```python
-def test_all_positive_prediction_has_false_alerts_outside_sparse_events() -> None:
+def test_alert_run_overlapping_truth_is_not_split_into_false_alerts() -> None:
     truth = np.array([0, 0, 1, 1, 0, 0], dtype=np.int8)
     probability = np.ones(6, dtype=np.float64)
     metrics = evaluate_probabilities(
         truth, probability, threshold=0.5, duration_hours=6 / 3600
     )
     assert metrics["event_recall"] == 1.0
-    assert metrics["false_alerts"] == 2
+    assert metrics["false_alerts"] == 0
     assert metrics["row_f1"] < 1.0
 
 
@@ -166,9 +166,12 @@ def test_segment_boundaries_never_merge_false_alerts() -> None:
     assert result["false_alerts"] == 2
 ```
 
-Also assert that a future row, another person, or another session cannot merge truth or alert runs.
+This follows the maximal-alert-run contract already used in the Kaggle
+notebook: one continuous alert that overlaps a truth event is one valid alert,
+not two false fragments. Also assert that a time gap, future row, another
+person, or another session cannot merge truth or alert runs.
 
-- [ ] **Step 2: Run focused tests to verify RED**
+- [x] **Step 2: Run focused tests to verify RED**
 
 Run:
 
@@ -179,7 +182,7 @@ Run:
 
 Expected: at least the new segmented API test fails because the function is absent.
 
-- [ ] **Step 3: Implement the segmented evaluator**
+- [x] **Step 3: Implement the segmented evaluator**
 
 In `metrics.py`, group with stable sorting:
 
@@ -257,7 +260,7 @@ def evaluate_segmented_probabilities(
 
 Reject duplicate time inside one segment, missing identity, non-binary truth, non-finite probability, and probability outside `[0, 1]`.
 
-- [ ] **Step 4: Prove Kaggle/package semantic parity**
+- [x] **Step 4: Prove Kaggle/package semantic parity**
 
 Use deterministic fixtures to compare the Kaggle notebook namespace with
 `evaluate_segmented_probabilities`. The same truth, probability, threshold, and
@@ -273,7 +276,7 @@ Run:
 
 Expected: PASS with identical direct and common-grid results.
 
-- [ ] **Step 5: Run the full suite and commit**
+- [x] **Step 5: Run the full suite and commit**
 
 Run:
 

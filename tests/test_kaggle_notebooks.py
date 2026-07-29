@@ -17,6 +17,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from multisensor_ml import metrics as metrics_module
+
 KAGGLE_DIR = Path(__file__).parents[1] / "kaggle"
 PROJECT_ROOT = KAGGLE_DIR.parent
 NOTEBOOKS = [
@@ -5254,6 +5256,64 @@ def test_round6_streaming_contract_uses_segment_state_and_bounded_forecast() -> 
         "forecast_left_censored_support",
     ):
         assert token in metrics
+
+
+def test_round6_ml_notebook_event_metrics_match_package_semantics() -> None:
+    ml_source = code_cell_source(
+        load_notebooks()[KAGGLE_DIR / "02_ml_benchmark.ipynb"]
+    )
+    ml_tree = ast.parse(ml_source)
+    segment_state = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "SegmentEventGridState")
+    ) or ""
+    event_statistics = ast.get_source_segment(
+        ml_source, _named_definition(ml_tree, "_common_grid_event_statistics")
+    ) or ""
+    namespace = {
+        "np": np,
+        "pd": pd,
+        "Any": Any,
+        "Mapping": Mapping,
+        "COMMON_THRESHOLD_GRID_SIZE": 101,
+    }
+    exec(segment_state + "\n" + event_statistics, namespace)
+    frame = pd.DataFrame(
+        {
+            "person_key": ["P1"] * 6,
+            "run_id": ["R1"] * 6,
+            "dataset_id": ["D1"] * 6,
+            "day_key": ["2026-01-01"] * 6,
+            "session_id": ["S1"] * 4 + ["S2"] * 2,
+            "canonical_time": pd.date_range(
+                "2026-01-01",
+                periods=6,
+                freq="s",
+                tz="UTC",
+            ),
+            "label": [0, 1, 1, 0, 0, 0],
+            "probability": [0.8] * 6,
+        }
+    )
+
+    notebook_result = namespace["_common_grid_event_statistics"](frame)
+    package_result = metrics_module.evaluate_segmented_probabilities(
+        frame,
+        threshold=0.5,
+        truth_column="label",
+        probability_column="probability",
+    )
+    threshold_index = 50
+
+    assert notebook_result["truth_events"] == (
+        package_result["detected_events"] + package_result["missed_events"]
+    )
+    assert notebook_result["detected"][threshold_index] == (
+        package_result["detected_events"]
+    )
+    assert notebook_result["false_alerts"][threshold_index] == (
+        package_result["false_alerts"]
+    )
+    assert notebook_result["duration_hours"] == pytest.approx(6 / 3600)
 
 
 def test_round7_forecast_onset_uses_physical_event_not_pattern_stage() -> None:

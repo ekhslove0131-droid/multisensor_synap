@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 from pytest import MonkeyPatch
 
 from multisensor_ml import metrics as metrics_module
@@ -119,3 +120,267 @@ def test_forecast_lead_time_is_measured_from_first_alert_to_onset() -> None:
     leads = forecast_lead_times(truth, probability, threshold=0.5)
 
     assert leads == [2, 2]
+
+
+def test_segmented_evaluation_counts_false_alerts_per_session() -> None:
+    frame = pd.DataFrame(
+        {
+            "dataset_id": ["D1"] * 4,
+            "person_key": ["P1"] * 4,
+            "day_key": ["2026-01-01"] * 4,
+            "session_id": ["S1", "S1", "S2", "S2"],
+            "canonical_time": pd.to_datetime(
+                [
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:01Z",
+                    "2026-01-01T00:00:02Z",
+                    "2026-01-01T00:00:03Z",
+                ],
+                utc=True,
+            ),
+            "label": [0, 0, 0, 0],
+            "probability": [0.9, 0.9, 0.9, 0.9],
+        }
+    )
+
+    result = metrics_module.evaluate_segmented_probabilities(
+        frame,
+        threshold=0.5,
+        truth_column="label",
+        probability_column="probability",
+    )
+
+    assert result["false_alerts"] == 2
+    assert result["false_alerts_per_hour"] == 1800.0
+
+
+def test_segmented_evaluation_counts_truth_events_per_session() -> None:
+    frame = pd.DataFrame(
+        {
+            "dataset_id": ["D1", "D1"],
+            "person_key": ["P1", "P1"],
+            "day_key": ["2026-01-01", "2026-01-01"],
+            "session_id": ["S1", "S2"],
+            "canonical_time": pd.to_datetime(
+                ["2026-01-01T00:00:00Z", "2026-01-01T00:00:01Z"],
+                utc=True,
+            ),
+            "label": [1, 1],
+            "probability": [0.9, 0.9],
+        }
+    )
+
+    result = metrics_module.evaluate_segmented_probabilities(
+        frame,
+        threshold=0.5,
+        truth_column="label",
+        probability_column="probability",
+    )
+
+    assert result["detected_events"] == 2
+    assert result["missed_events"] == 0
+    assert result["event_recall"] == 1.0
+
+
+def test_segmented_evaluation_rejects_duplicate_time_inside_session() -> None:
+    frame = pd.DataFrame(
+        {
+            "dataset_id": ["D1", "D1"],
+            "person_key": ["P1", "P1"],
+            "day_key": ["2026-01-01", "2026-01-01"],
+            "session_id": ["S1", "S1"],
+            "canonical_time": pd.to_datetime(
+                ["2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+                utc=True,
+            ),
+            "label": [0, 1],
+            "probability": [0.1, 0.9],
+        }
+    )
+
+    with pytest.raises(ValueError, match="duplicate canonical_time"):
+        metrics_module.evaluate_segmented_probabilities(
+            frame,
+            threshold=0.5,
+            truth_column="label",
+            probability_column="probability",
+        )
+
+
+def test_segmented_evaluation_rejects_missing_identity_columns() -> None:
+    frame = pd.DataFrame(
+        {
+            "person_key": ["P1", "P1"],
+            "canonical_time": pd.date_range(
+                "2026-01-01",
+                periods=2,
+                freq="s",
+                tz="UTC",
+            ),
+            "label": [0, 1],
+            "probability": [0.1, 0.9],
+        }
+    )
+
+    with pytest.raises(ValueError, match="event evaluation requires columns"):
+        metrics_module.evaluate_segmented_probabilities(
+            frame,
+            threshold=0.5,
+            truth_column="label",
+            probability_column="probability",
+        )
+
+
+@pytest.mark.parametrize("invalid_probability", [np.nan, -0.1, 1.1])
+def test_segmented_evaluation_rejects_invalid_probability(
+    invalid_probability: float,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "dataset_id": ["D1", "D1"],
+            "person_key": ["P1", "P1"],
+            "day_key": ["2026-01-01", "2026-01-01"],
+            "session_id": ["S1", "S1"],
+            "canonical_time": pd.date_range(
+                "2026-01-01",
+                periods=2,
+                freq="s",
+                tz="UTC",
+            ),
+            "label": [0, 1],
+            "probability": [0.1, invalid_probability],
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="probability must be finite and within",
+    ):
+        metrics_module.evaluate_segmented_probabilities(
+            frame,
+            threshold=0.5,
+            truth_column="label",
+            probability_column="probability",
+        )
+
+
+@pytest.mark.parametrize("invalid_truth", [np.nan, -1, 2])
+def test_segmented_evaluation_rejects_non_binary_truth(
+    invalid_truth: float,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "dataset_id": ["D1", "D1"],
+            "person_key": ["P1", "P1"],
+            "day_key": ["2026-01-01", "2026-01-01"],
+            "session_id": ["S1", "S1"],
+            "canonical_time": pd.date_range(
+                "2026-01-01",
+                periods=2,
+                freq="s",
+                tz="UTC",
+            ),
+            "label": [0, invalid_truth],
+            "probability": [0.1, 0.9],
+        }
+    )
+
+    with pytest.raises(ValueError, match="truth must contain exact binary"):
+        metrics_module.evaluate_segmented_probabilities(
+            frame,
+            threshold=0.5,
+            truth_column="label",
+            probability_column="probability",
+        )
+
+
+@pytest.mark.parametrize("identity_column", metrics_module.EVENT_SEGMENT_KEYS)
+def test_segmented_evaluation_rejects_null_identity(
+    identity_column: str,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "dataset_id": ["D1", "D1"],
+            "person_key": ["P1", "P1"],
+            "day_key": ["2026-01-01", "2026-01-01"],
+            "session_id": ["S1", "S1"],
+            "canonical_time": pd.date_range(
+                "2026-01-01",
+                periods=2,
+                freq="s",
+                tz="UTC",
+            ),
+            "label": [0, 1],
+            "probability": [0.1, 0.9],
+        }
+    )
+    frame.loc[0, identity_column] = None
+
+    with pytest.raises(ValueError, match="event segment identity contains null"):
+        metrics_module.evaluate_segmented_probabilities(
+            frame,
+            threshold=0.5,
+            truth_column="label",
+            probability_column="probability",
+        )
+
+
+def test_event_alert_run_overlapping_truth_is_not_split_into_false_alerts() -> None:
+    frame = pd.DataFrame(
+        {
+            "dataset_id": ["D1"] * 4,
+            "person_key": ["P1"] * 4,
+            "day_key": ["2026-01-01"] * 4,
+            "session_id": ["S1"] * 4,
+            "canonical_time": pd.date_range(
+                "2026-01-01",
+                periods=4,
+                freq="s",
+                tz="UTC",
+            ),
+            "label": [0, 1, 1, 0],
+            "probability": [0.8, 0.8, 0.8, 0.8],
+        }
+    )
+
+    result = metrics_module.evaluate_segmented_probabilities(
+        frame,
+        threshold=0.5,
+        truth_column="label",
+        probability_column="probability",
+    )
+
+    assert result["detected_events"] == 1
+    assert result["false_alerts"] == 0
+
+
+def test_segmented_evaluation_closes_alert_at_time_gap() -> None:
+    frame = pd.DataFrame(
+        {
+            "dataset_id": ["D1"] * 4,
+            "person_key": ["P1"] * 4,
+            "day_key": ["2026-01-01"] * 4,
+            "session_id": ["S1"] * 4,
+            "canonical_time": pd.to_datetime(
+                [
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:01Z",
+                    "2026-01-01T00:00:10Z",
+                    "2026-01-01T00:00:11Z",
+                ],
+                utc=True,
+            ),
+            "label": [0, 0, 0, 0],
+            "probability": [0.9, 0.9, 0.9, 0.9],
+        }
+    )
+
+    result = metrics_module.evaluate_segmented_probabilities(
+        frame,
+        threshold=0.5,
+        truth_column="label",
+        probability_column="probability",
+    )
+
+    assert result["false_alerts"] == 2
+    assert result["false_alerts_per_hour"] == pytest.approx(1800)
