@@ -725,6 +725,7 @@ def test_build_ml_role_view_removes_denied_columns_for_every_role(split_role: st
             "person_id": [split_role],
             "canonical_time": [0],
             "event_binary": [1],
+            "event_id": [f"{split_role}-event"],
             "event_intensity_truth": [0.9],
             "active_target_event": [1],
             "hard_negative_id": ["not-a-feature"],
@@ -734,7 +735,34 @@ def test_build_ml_role_view_removes_denied_columns_for_every_role(split_role: st
 
     view = namespace["build_ml_role_view"](prepared, labels, split, split_role)
 
+    assert "event_id" not in view.columns
     namespace["assert_no_truth_leakage"](view.columns)
+
+
+def test_bind_source_segment_identity_uses_physical_file_and_utc_day() -> None:
+    namespace = ml_data_namespace()
+    source = pd.DataFrame(
+        {
+            "run_id": ["run-1", "run-1"],
+            "person_id": ["P1", "P1"],
+            "canonical_time": [
+                pd.Timestamp("2026-01-01T23:59:59Z"),
+                pd.Timestamp("2026-01-02T00:00:00Z"),
+            ],
+        }
+    )
+
+    bound = namespace["bind_source_segment_identity"](
+        source,
+        dataset_id="prepared-person-1",
+    )
+
+    assert bound["dataset_id"].tolist() == ["prepared-person-1"] * 2
+    assert bound["session_id"].tolist() == ["prepared-person-1"] * 2
+    assert bound["day_key"].tolist() == ["2026-01-01", "2026-01-02"]
+    assert isinstance(bound["canonical_time"].dtype, pd.DatetimeTZDtype)
+    assert str(bound["canonical_time"].dtype.tz) == "UTC"
+    assert "dataset_id" not in source.columns
 
 
 def test_validate_manifest_hashes_rejects_missing_flat_file(tmp_path: Path) -> None:
@@ -1361,6 +1389,20 @@ def test_numeric_feature_contract_handles_task2_shaped_frame_for_both_candidates
     assert all(candidate["pattern_model"].n_features_in_ == 5 for candidate in candidates)
 
 
+def test_ml_feature_contract_allows_phase_audit_but_never_selects_it() -> None:
+    namespace = ml_benchmark_namespace()
+    frame = pd.DataFrame(
+        {
+            "phase": ["pre_early", "peak"],
+            "autonomic_arousal__robust_z": [0.1, 0.9],
+        }
+    )
+
+    features = namespace["_infer_feature_columns"](frame)
+
+    assert features == ["autonomic_arousal__robust_z"]
+
+
 @pytest.mark.parametrize(
     "invalid_feature",
     [
@@ -1482,12 +1524,15 @@ def test_ml_training_masks_keep_pattern_onset_and_behavior_semantics_distinct() 
     for behavior in namespace["BEHAVIOR_CODES"]:
         frame[behavior] = 0
     frame.loc[frame["row_kind"].eq("hard_negative_positive"), "ear_covering"] = 1
+    frame.loc[frame["row_kind"].eq("onset_audit"), "head_turn_away"] = 1
 
     stage_rows = frame.loc[namespace["_select_stage_training_rows"](frame), "row_kind"]
     behavior_rows = frame.loc[namespace["_select_behavior_training_rows"](frame), "row_kind"]
 
     assert stage_rows.tolist() == ["low_pre_onset"]
-    assert behavior_rows.tolist() == ["low_pre_onset", "hard_negative_positive"]
+    assert behavior_rows.tolist() == [
+        "low_pre_onset", "onset_audit", "hard_negative_positive"
+    ]
     assert frame.loc[frame["row_kind"].eq("onset_audit"), "event_binary"].item() == 1
     assert frame.loc[frame["row_kind"].eq("onset_audit"), "stage_code"].item() == "NO_EVENT"
 
@@ -1497,6 +1542,7 @@ def test_behavior_decision_mask_rejects_positive_ordinary_baseline() -> None:
     frame = pd.DataFrame(
         {
             "pattern_binary": [0],
+            "event_binary": [0],
             "hard_negative": [0],
         }
     )
@@ -1504,7 +1550,10 @@ def test_behavior_decision_mask_rejects_positive_ordinary_baseline() -> None:
         frame[behavior] = 0
     frame.loc[0, "ear_covering"] = 1
 
-    with pytest.raises(ValueError, match="behavior-positive rows must be pattern or hard negative"):
+    with pytest.raises(
+        ValueError,
+        match="behavior-positive rows must be pattern, objective event, or hard negative",
+    ):
         namespace["_select_behavior_training_rows"](frame)
 
 
@@ -1514,6 +1563,7 @@ def test_behavior_decision_mask_rejects_nullable_hard_negative(dtype: str) -> No
     frame = pd.DataFrame(
         {
             "pattern_binary": [0],
+            "event_binary": [0],
             "hard_negative": pd.Series([pd.NA], dtype=dtype),
         }
     )
@@ -1533,6 +1583,7 @@ def test_behavior_decision_mask_returns_strict_bool_for_valid_nullable_dtype(
     frame = pd.DataFrame(
         {
             "pattern_binary": [1, 0, 0, 0],
+            "event_binary": [1, 0, 0, 0],
             "hard_negative": pd.Series([0, 1, 1, 0], dtype=dtype),
         }
     )
@@ -1597,7 +1648,7 @@ def test_prediction_rows_apply_target_specific_decision_masks() -> None:
         for stage in namespace["STAGE_CODES"]
     )
     assert all(
-        len(predictions.loc[predictions["target"].eq(f"behavior::{behavior}")]) == 2
+        len(predictions.loc[predictions["target"].eq(f"behavior::{behavior}")]) == 3
         for behavior in namespace["BEHAVIOR_CODES"]
     )
 
