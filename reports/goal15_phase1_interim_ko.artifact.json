@@ -1,0 +1,252 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "1차 합성데이터·시계열 머신러닝 중간보고서",
+    "description": "합성데이터 생성부터 KNIME과 Kaggle ML validation까지의 작업, 실패, 수정, 배운 점과 2차 실행계획.",
+    "generatedAt": "2026-07-29T13:30:00+09:00",
+    "charts": [
+      {
+        "id": "validation_metric_comparison",
+        "title": "1차 validation 지표 비교",
+        "subtitle": "5단계 분류는 방향성이 보였지만 행동 예측과 이벤트 판정은 추가 검증이 필요하다.",
+        "type": "bar",
+        "dataset": "validation_summary",
+        "sourceId": "kaggle_v5",
+        "layout": "wide",
+        "encodings": {
+          "x": {
+            "field": "target",
+            "type": "nominal",
+            "label": "학습 목표"
+          },
+          "y": {
+            "fields": [
+              "aucpr",
+              "auroc",
+              "f1"
+            ],
+            "type": "quantitative",
+            "label": "점수"
+          },
+          "tooltip": [
+            {
+              "field": "support",
+              "type": "quantitative",
+              "label": "평가 행 수",
+              "format": "number"
+            },
+            {
+              "field": "status",
+              "type": "text",
+              "label": "데이터 상태"
+            }
+          ]
+        },
+        "yAxisTitle": "0–1",
+        "valueFormat": "number"
+      }
+    ],
+    "sources": [
+      {
+        "id": "phase1_design",
+        "label": "1차 중간보고서 설계",
+        "path": "docs/superpowers/specs/2026-07-29-time-series-ml-interim-report-design.md"
+      },
+      {
+        "id": "phase2_plan",
+        "label": "2차 시계열 ML validation 계획",
+        "path": "docs/superpowers/plans/2026-07-29-phase2-time-series-ml-validation.md"
+      },
+      {
+        "id": "hierarchical_results",
+        "label": "Goal 1.5 계층형 MVP 결과",
+        "path": "docs/RESULTS_HIERARCHICAL_MVP3.md"
+      },
+      {
+        "id": "oracle_results",
+        "label": "MVP 3-seed Oracle 결과",
+        "path": "docs/RESULTS_MVP3.md"
+      },
+      {
+        "id": "kaggle_v5",
+        "label": "Kaggle ML Benchmark v5",
+        "path": "reports/queries/phase1_validation_summary.sql",
+        "href": "https://www.kaggle.com/code/bjcoding/multisensor-goal1-5-02-ml-benchmark",
+        "query": {
+          "description": "Kaggle ML v5 champion metrics에서 검증한 패턴·5단계·행동 요약 세 행.",
+          "engine": "SQLite",
+          "id": "phase1_validation_summary",
+          "language": "sql",
+          "executed_at": "2026-07-29T13:30:00+09:00",
+          "sql": "SELECT '패턴' AS target, 0.494423 AS aucpr, 0.810170 AS auroc, 0.049752 AS f1, 2592000 AS support, 'oracle/sanity' AS status UNION ALL SELECT '5단계 평균', 0.639080, 0.866254, 0.603361, 66124, 'oracle/sanity' UNION ALL SELECT '행동 평균', 0.398993, 0.540588, 0.379214, 74322, 'oracle/sanity';",
+          "tables_used": [],
+          "filters": [
+            "split_role=validation",
+            "RUN_LOCKED_TEST=False"
+          ],
+          "metric_definitions": [
+            "AUCPR: validation label과 예측확률의 precision-recall curve 면적",
+            "AUROC: validation label과 예측확률의 ROC curve 면적",
+            "F1: validation threshold에서 계산한 1Hz 행 단위 F1; 5단계와 행동은 target macro 평균"
+          ]
+        }
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# 1차 합성데이터·시계열 머신러닝 중간보고서\n\n**작성 기준:** 2026년 7월 29일 · **상태:** `oracle/sanity` · **실제 정확도:** `NOT VERIFIED`"
+      },
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "sourceId": "kaggle_v5",
+        "body": "## 이번 1차에서 얻은 결론\n\n1차의 가장 큰 성과는 높은 정확도를 얻은 것이 아니라 **합성데이터 생성 → 라벨 → 기준선 → 사건/단계/행동 모델 → KNIME·레지스트리 → Kaggle validation** 흐름을 실제로 연결한 것이다. 현재 champion은 HistGradientBoosting이지만 최종 모델로 확정할 단계는 아니다.\n\n5단계 평균은 AUROC **0.866**, F1 **0.603**으로 방향성이 보였다. 행동 평균은 AUROC **0.541**, F1 **0.379**로 약했고, 패턴은 AUROC **0.810**과 달리 row F1이 **0.050**에 불과했다. 따라서 2차에서는 새 모델 추가보다 이벤트 평가와 시계열 경계를 먼저 고쳐야 한다."
+      },
+      {
+        "id": "initial_goal",
+        "type": "markdown",
+        "sourceId": "phase1_design",
+        "body": "## 처음 하려던 것\n\n처음부터 실제 웨어러블 성능을 주장하려던 것은 아니었다. 기존 합성 생성기의 truth·latent를 이용해 다음 구조가 작동하는지 확인하려 했다.\n\n1. train person으로 전역 기준선을 만든다.\n2. 개인의 과거 데이터만으로 기준선을 보정한다.\n3. 기준선 편차와 causal 파생변수로 사건을 감지한다.\n4. 사건을 LOW → MEDIUM → HIGH → DECREASING → RECOVERY로 구분한다.\n5. 관찰 행동 라벨로 행동별 확률을 예측한다.\n6. 결과와 모델 버전을 KNIME에서 검토한다."
+      },
+      {
+        "id": "synthetic_data",
+        "type": "markdown",
+        "sourceId": "hierarchical_results",
+        "body": "## 합성데이터와 라벨을 어떻게 만들었는가\n\nseed 3개에서 12명씩, 총 **36명 × 5일**을 만들고 사람 기준으로 train 24명, validation 6명, locked test 6명으로 고정했다. 1Hz 단계 timeline은 **15,552,000행**, outcome 사건은 **930건**, 행동 양성 라벨은 **2,416건**이다.\n\n라벨은 센서 임계값으로 만들지 않았다. 합성 truth의 사건 시각과 phase로 NO_EVENT 및 5단계를 만들고, hidden archetype·intensity·context의 영향을 받는 결정적 확률 표본으로 10개 행동 다중 라벨을 만들었다. hidden 값은 학습 입력에서 차단했고 hard negative와 일반 구간에도 유사 행동을 넣었다.\n\n이 데이터는 학습 파이프라인 검증용이다. 실제 장비 신호나 물리적 동기화가 아니며 장비 상태는 `NOT_AVAILABLE_TRUTH_ONLY`다."
+      },
+      {
+        "id": "work_history",
+        "type": "markdown",
+        "sourceId": "phase1_design",
+        "body": "## 실제 작업은 이렇게 진행됐다\n\n### 1. Oracle 기본환경\n\n생성기와 학습 저장소를 분리하고, causal baseline·rolling feature·Logistic/HGB·stress harness·`.skops` bundle을 구현했다. 처음 KNIME 화면은 Python 산출물을 읽어 보여주는 Oracle Benchmark였다.\n\n### 2. 합성데이터 공장과 레지스트리\n\n사건·단계·행동 outcome을 만드는 Synthetic Factory, SQLite 불변 모델 레지스트리, 한국어 결과 router를 만들었다. KNIME에는 Factory와 Training Registry를 새로 만들고 컴포넌트 receipt를 실제로 연결했다.\n\n### 3. Kaggle 이전\n\n약 **10.23GB**, 47개 파일을 비공개 Dataset으로 게시했다. ML/DL용 네 노트북도 비공개로 올렸지만 GPU 중복 사용을 막기 위해 ML benchmark 하나만 CPU로 실행했다. Kaggle ML v5는 약 **41분 35초** 후 완료됐다."
+      },
+      {
+        "id": "trials_and_errors",
+        "type": "markdown",
+        "sourceId": "phase1_design",
+        "body": "## 시행착오: 무엇이 잘되지 않았고 무엇을 바꿨는가\n\n| 시도 | 잘되지 않은 점 | 실제 대응과 배운 점 |\n|---|---|---|\n| 최초 KNIME Oracle | 화면은 보였지만 학습 단계와 모델 버전이 연결된 구조가 아니었다 | Factory·Registry workflow와 receipt 연결을 새로 만들었다. KNIME은 학습 코드 복제보다 실행·검토·승격 인터페이스로 쓰는 편이 낫다. |\n| STD 타입 자동 탐색 | GMM K=2~6이 안정성과 최소 인원 조건을 통과하지 못했다 | 근거 없이 타입을 만들지 않고 K=1 `STD-A`로 복귀했다. 36명만으로 복수 표준 타입을 확정할 수 없다. |\n| 행동 예측 | 사건·단계보다 행동 AUCPR이 낮고 사람별 편차가 컸다 | 행동별 one-vs-rest와 모델 1의 person-grouped OOF 확률을 사용했다. 더 많은 관찰 사건과 일관된 라벨이 필요하다. |\n| noise stress | Gaussian 0.20에서 사건 AUCPR이 약 90% 감소했고 axis dropout에서는 event recall이 0까지 하락했다 | stress 결과를 release에 남기고 실제 웨어러블 성능과 분리했다. 현재 모델이 실제 노이즈에 강하다는 근거는 없다. |\n| Kaggle ML data v2 | validation의 `event_id`가 숫자와 문자열로 섞여 Parquet 변환이 실패했다 | 모든 split에서 audit ID를 ML view에서 제거하는 회귀 테스트를 추가했다. train만 확인하면 validation 오류를 놓친다. |\n| Kaggle ML data v3 | `dataset_id`, `day_key`, `session_id`가 없어 benchmark가 중단됐다 | 물리 파일·UTC day·session identity를 모든 role에 결합했다. 시계열 평가는 person 외의 경계도 필요하다. |\n| Kaggle ML benchmark v3 | `phase`가 미등록 feature처럼 취급되어 실행이 중단됐다 | phase는 audit용으로 허용하지만 입력 feature에서는 제외했다. 감사 열과 모델 입력 열은 별도 계약이어야 한다. |\n| Kaggle ML benchmark v4 | objective event onset의 행동 라벨이 기존 pattern/hard-negative mask 밖에 있었다 | `event_binary` onset을 행동 결정 구간에 포함하고 일반 baseline positive는 계속 거부했다. onset과 pre-event pattern은 다른 의미다. |\n| Kaggle ML benchmark v5 | 실행은 완료됐지만 champion 지표만 남아 Logistic과 HGB의 정확한 차이를 잃었다 | HGB 결과와 hash는 보존했지만 후보 비교 artifact는 2차에서 다시 만들어야 한다. |\n| 이벤트 평가 | event recall 1.0, false alerts/hour 0인데 row F1 0.05가 나왔다 | 성공으로 해석하지 않고 사용 중지했다. 모델을 바꾸기 전에 event-run 집계와 threshold를 감사해야 한다. |\n| 딥러닝 준비 | 평가 문제가 남은 채 TCN을 돌리면 GPU를 써도 비교가 무의미했다 | DL 노트북을 비활성화하고 2차는 머신러닝 평가와 시계열 피처에 집중하기로 했다. |"
+      },
+      {
+        "id": "current_results",
+        "type": "markdown",
+        "sourceId": "kaggle_v5",
+        "body": "## 현재까지 알게 된 것과 아직 모르는 것\n\n**알게 된 것:** 합성 Oracle에서는 HistGradientBoosting이 선택됐고, 5단계 구분은 행동 예측보다 상대적으로 가능성이 높다. 파생변수 기반 표형 시계열 문제는 우선 머신러닝으로 계속 실험할 가치가 있다.\n\n**아직 모르는 것:** Logistic과 HGB의 완전한 후보 비교, event-run 지표의 정확성, 실제 장비 노이즈에서의 성능, 개인 표준 타입의 재현성은 확인되지 않았다. LightGBM도 아직 설치하거나 실행하지 않았다."
+      },
+      {
+        "id": "validation_chart",
+        "type": "chart",
+        "chartId": "validation_metric_comparison"
+      },
+      {
+        "id": "model_direction",
+        "type": "markdown",
+        "sourceId": "phase1_design",
+        "body": "## 왜 HistGradientBoosting과 상태 decoder에 집중하는가\n\nHistGradientBoosting은 현재 의존성 안에서 비선형 상호작용과 결측을 다룰 수 있고 실제 validation champion으로 선택됐다. 그러나 긴 시간 순서를 직접 기억하지는 못한다. 2차에서는 이 약점을 딥러닝이 아니라 다음 방식으로 보완한다.\n\n- lag 1/5/15/30/60초\n- rolling mean·std·slope 5/15/30/60/180/300초\n- 개인 기준선 편차와 변화량\n- 사람·dataset·day·session·gap 경계 reset\n- 허용 전이, 최소 지속시간, hysteresis를 가진 상태 decoder\n- OOD·장시간 결측에서 `NOT_DECISIONABLE`\n\nLogistic Regression은 설명·calibration 기준 모델로 유지한다. LightGBM은 평가 계약이 통과한 후에만 동일 split과 동일 지표로 추가한다."
+      },
+      {
+        "id": "phase2_plan",
+        "type": "markdown",
+        "sourceId": "phase2_plan",
+        "body": "## 2차 실행계획\n\n### 1. 평가 신뢰성 복구\n\n모든 positive 예측, sparse event, 사람·day·session 경계, gap, false alert run을 회귀 테스트한다. 동일 예측을 직접 계산한 결과와 Kaggle 결과가 일치해야 한다.\n\n### 2. 후보 artifact 복구\n\nLogistic과 HGB의 metrics, threshold, runtime, support, dataset/split/feature hash를 모두 보존한다. champion을 선택하기 전 후보 결과를 잃지 않는다.\n\n### 3. causal 시계열 피처 검증\n\n미래 값을 크게 바꿔도 과거 피처가 변하지 않아야 한다. 사람·session·gap을 넘는 lag와 rolling 계산은 금지한다.\n\n### 4. Logistic/HGB 재실행\n\nvalidation만 사용해 AUCPR, AUROC, row/person F1, event precision·recall·F1, false alerts/hour, Brier, ECE, runtime과 bundle 크기를 비교한다.\n\n### 5. LightGBM 조건부 비교\n\n1~4가 통과한 경우에만 CPU LightGBM을 추가한다. AUCPR·event F1이 개선되고 false alert·ECE가 5% 넘게 악화되지 않으며 person-macro F1이 유지될 때만 교체 후보가 된다.\n\n### 6. decoder·calibration·stress\n\nraw probability와 decoded state를 모두 저장한다. calibration은 Brier와 ECE가 함께 좋아질 때만 채택한다.\n\n### 7. locked test 한 번\n\nvalidation으로 composite release 하나를 선택한 후 한 번만 실행한다. 결과를 본 뒤 threshold나 모델을 바꾸지 않는다."
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "body": "## 해석 제한\n\n- 이 결과는 `oracle/sanity`이며 실제 행동 예측 성능이 아니다.\n- 실제 정확도는 `NOT VERIFIED`다.\n- 로컬 계층형 MVP에서는 locked test를 한 번 실행했지만 Kaggle v5는 validation까지만 실행했다.\n- 실제 Muse·Polar·Watch 동기화와 물리적 noise correction은 아직 없다.\n- 행동 코드는 객관적 관찰 라벨 후보이지 멜트다운·감각추구 같은 요약 판단의 직접 타깃이 아니다.\n- 의료 판단이나 임상 성능으로 해석해서는 안 된다."
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## 2차에서 답해야 할 질문\n\n1. event recall과 false alerts/hour를 raw prediction에서 정확히 재구성할 수 있는가?\n2. 시계열 경계를 바로잡아도 HGB가 Logistic보다 안정적으로 우수한가?\n3. 5단계 성능은 사람별로도 유지되는가, 일부 synthetic person에 의존하는가?\n4. 행동별 support를 늘리면 AUCPR이 개선되는가, 아니면 합성 라벨 생성 규칙이 약한가?\n5. 실제 데이터가 들어왔을 때 어떤 OOD 조건에서 판단을 보류해야 하는가?"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-07-29T13:30:00+09:00",
+    "status": "ready",
+    "datasets": {
+      "validation_summary": [
+        {
+          "target": "패턴",
+          "aucpr": 0.494423,
+          "auroc": 0.81017,
+          "f1": 0.049752,
+          "support": 2592000,
+          "status": "oracle/sanity"
+        },
+        {
+          "target": "5단계 평균",
+          "aucpr": 0.63908,
+          "auroc": 0.866254,
+          "f1": 0.603361,
+          "support": 66124,
+          "status": "oracle/sanity"
+        },
+        {
+          "target": "행동 평균",
+          "aucpr": 0.398993,
+          "auroc": 0.540588,
+          "f1": 0.379214,
+          "support": 74322,
+          "status": "oracle/sanity"
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "phase1_design",
+      "label": "1차 중간보고서 설계",
+      "path": "docs/superpowers/specs/2026-07-29-time-series-ml-interim-report-design.md"
+    },
+    {
+      "id": "phase2_plan",
+      "label": "2차 시계열 ML validation 계획",
+      "path": "docs/superpowers/plans/2026-07-29-phase2-time-series-ml-validation.md"
+    },
+    {
+      "id": "hierarchical_results",
+      "label": "Goal 1.5 계층형 MVP 결과",
+      "path": "docs/RESULTS_HIERARCHICAL_MVP3.md"
+    },
+    {
+      "id": "oracle_results",
+      "label": "MVP 3-seed Oracle 결과",
+      "path": "docs/RESULTS_MVP3.md"
+    },
+    {
+      "id": "kaggle_v5",
+      "label": "Kaggle ML Benchmark v5",
+      "path": "reports/queries/phase1_validation_summary.sql",
+      "href": "https://www.kaggle.com/code/bjcoding/multisensor-goal1-5-02-ml-benchmark",
+      "query": {
+        "description": "Kaggle ML v5 champion metrics에서 검증한 패턴·5단계·행동 요약 세 행.",
+        "engine": "SQLite",
+        "id": "phase1_validation_summary",
+        "language": "sql",
+        "executed_at": "2026-07-29T13:30:00+09:00",
+        "sql": "SELECT '패턴' AS target, 0.494423 AS aucpr, 0.810170 AS auroc, 0.049752 AS f1, 2592000 AS support, 'oracle/sanity' AS status UNION ALL SELECT '5단계 평균', 0.639080, 0.866254, 0.603361, 66124, 'oracle/sanity' UNION ALL SELECT '행동 평균', 0.398993, 0.540588, 0.379214, 74322, 'oracle/sanity';",
+        "tables_used": [],
+        "filters": [
+          "split_role=validation",
+          "RUN_LOCKED_TEST=False"
+        ],
+        "metric_definitions": [
+          "AUCPR: validation label과 예측확률의 precision-recall curve 면적",
+          "AUROC: validation label과 예측확률의 ROC curve 면적",
+          "F1: validation threshold에서 계산한 1Hz 행 단위 F1; 5단계와 행동은 target macro 평균"
+        ]
+      }
+    }
+  ],
+  "package_info": {
+    "title": "1차 합성데이터·시계열 머신러닝 중간보고서",
+    "language": "ko",
+    "delivery": "portable_html"
+  }
+}
