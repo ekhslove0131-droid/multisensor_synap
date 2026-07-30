@@ -9,6 +9,10 @@ from multisensor_ml.factory import run_synthetic_factory
 from multisensor_ml.knime import export_knime_artifacts
 from multisensor_ml.materialize import materialize_synthetic
 from multisensor_ml.model_registry import ModelRegistry, import_oracle_bundle
+from multisensor_ml.phase3_pipeline import (
+    prepare_phase3_source,
+    run_phase3_from_config,
+)
 from multisensor_ml.pipeline import (
     PreparedSeries,
     evaluate_prepared_bundle,
@@ -24,6 +28,7 @@ from multisensor_ml.registry_workflow import (
 from multisensor_ml.settings import (
     load_factory_config,
     load_goal15_config,
+    load_phase3_config,
     load_training_registry_config,
 )
 
@@ -136,6 +141,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_all = subparsers.add_parser("run-all")
     run_all.add_argument("--config", type=Path, required=True)
+
+    phase3 = subparsers.add_parser("phase3")
+    phase3_commands = phase3.add_subparsers(dest="phase3_command", required=True)
+    for phase3_command in ("prepare", "train-validate", "report-input"):
+        command_parser = phase3_commands.add_parser(phase3_command)
+        command_parser.add_argument("--config", type=Path, required=True)
     return parser
 
 
@@ -299,6 +310,35 @@ def main(argv: list[str] | None = None) -> int:
         registered = materialize_synthetic(goal_config)
         _emit(series_id=registered.series_id, registry=str(registered.registry_dir))
         return 0
+
+    if args.command == "phase3":
+        phase3_config = load_phase3_config(args.config)
+        if args.phase3_command == "prepare":
+            source = prepare_phase3_source(phase3_config)
+            _emit(
+                status="PREPARED",
+                data_status="oracle/sanity",
+                locked_test_read=False,
+                source=str(source),
+            )
+            return 0
+        if args.phase3_command == "train-validate":
+            phase3_result = run_phase3_from_config(phase3_config)
+            _emit(
+                status="VALIDATED",
+                data_status="oracle/sanity",
+                real_accuracy_status="NOT VERIFIED",
+                locked_test_read=False,
+                manifest=str(phase3_result.manifest_json),
+            )
+            return 0
+        if args.phase3_command == "report-input":
+            manifest = phase3_config.artifact_root / "result" / "phase3_manifest.json"
+            if not manifest.exists():
+                raise FileNotFoundError("run 'phase3 train-validate' before report-input")
+            _emit(status="READY", manifest=str(manifest))
+            return 0
+        raise AssertionError(f"unhandled Phase 3 command: {args.phase3_command}")
 
     if args.command == "prepare":
         project = args.project_root.resolve()

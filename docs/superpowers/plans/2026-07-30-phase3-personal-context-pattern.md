@@ -272,13 +272,13 @@ multisensor-ml phase3 report-input --config <yaml>
   - `phase3_cumulative_load.parquet`
   - `phase3_manifest.json`
 
-- [ ] **Step 1: Write a failing quick integration test**
+- [x] **Step 1: Write a failing quick integration test**
 
 Use the existing quick raw series. Assert deterministic source/split/policy/
 feature hashes, no locked-test reads, identical sampling ids across variants,
 train-person grouped OOF cap/threshold selection, and complete output schemas.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -286,13 +286,13 @@ Run:
 ./.venv/bin/pytest tests/test_phase3_pipeline.py -v
 ```
 
-- [ ] **Step 3: Implement streaming preparation**
+- [x] **Step 3: Implement streaming preparation**
 
 Read one person at a time from the three raw latent timelines. Fit global
 baselines from train people only. Generate one candidate variant at a time so
 multiple full 15.5M-row feature matrices are never resident together.
 
-- [ ] **Step 4: Implement train OOF selection and validation**
+- [x] **Step 4: Implement train OOF selection and validation**
 
 Use identical deterministic positive/hard-negative/matched-baseline row ids for
 every policy. Select weight cap and threshold only from person-grouped OOF.
@@ -300,7 +300,7 @@ Evaluate `G0`, selected `P1`, selected `P2`, `P2+CL`, and `P2+CL-B` on the
 untouched validation people. HGB is primary; Logistic is retained for G0 and
 the final selected personalized candidate as a regression reference.
 
-- [ ] **Step 5: Verify quick integration and commit**
+- [x] **Step 5: Verify quick integration and commit**
 
 Commit:
 
