@@ -48,6 +48,28 @@ class Phase3Outputs:
     manifest_json: Path
 
 
+def build_locked_identity_stubs(
+    source: pd.DataFrame,
+    locked_splits: pd.DataFrame,
+) -> pd.DataFrame:
+    """Create identity-only rows without reading locked-test sensor values."""
+
+    identity_columns = (
+        "dataset_id",
+        "run_id",
+        "person_id",
+        "person_key",
+        "split_role",
+    )
+    missing = sorted(set(identity_columns).difference(locked_splits.columns))
+    if missing:
+        raise ValueError(f"locked split identity missing columns: {missing}")
+    stubs = source.iloc[:0].copy().reindex(range(len(locked_splits)))
+    for column in identity_columns:
+        stubs[column] = locked_splits[column].to_numpy()
+    return stubs
+
+
 def prepare_phase3_source(config: Phase3Config) -> Path:
     """Materialize the approved oracle whitelist and independent labels only."""
 
@@ -204,13 +226,7 @@ def run_phase3_from_config(config: Phase3Config) -> Phase3Outputs:
     locked_splits = pd.read_parquet(
         config.registry_root / config.series_id / "splits.parquet"
     ).loc[lambda value: value["split_role"].eq("locked_test")]
-    locked_stub = source.iloc[:0].copy()
-    locked_stub = locked_stub.reindex(range(len(locked_splits)), fill_value=0)
-    locked_stub["person_key"] = locked_splits["person_key"].to_numpy()
-    locked_stub["split_role"] = "locked_test"
-    locked_stub["dataset_id"] = locked_splits["dataset_id"].to_numpy()
-    locked_stub["run_id"] = locked_splits["run_id"].to_numpy()
-    locked_stub["person_id"] = locked_splits["person_id"].to_numpy()
+    locked_stub = build_locked_identity_stubs(source, locked_splits)
     combined = pd.concat([source, locked_stub], ignore_index=True)
     return run_phase3_experiment(
         combined,

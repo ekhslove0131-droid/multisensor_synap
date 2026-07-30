@@ -348,6 +348,9 @@ def test_phase3_notebook_chain_is_sequential_cpu_and_locked_test_closed() -> Non
     assert "run_phase3_experiment" in pattern
     assert "P2+CL-B" in pattern
     assert "phase3_candidate_metrics.parquet" in pattern
+    assert "FEATURE_WINDOWS_SECONDS = (30,)" in pattern
+    assert "FEATURE_LAGS_SECONDS = (1,)" in pattern
+    assert 'RESOURCE_PROFILE = "reduced-memory-phase3-v1"' in pattern
     assert "RUN_LOCKED_TEST = False" in source
     assert "RUN_LOCKED_TEST = False" in pattern
     for stem in ("05_phase3_source_prepare", "06_phase3_personal_pattern"):

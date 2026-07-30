@@ -5,7 +5,10 @@ import numpy as np
 import pandas as pd
 
 from multisensor_ml.contracts import ORACLE_LATENT_FACTORS
-from multisensor_ml.phase3_pipeline import run_phase3_experiment
+from multisensor_ml.phase3_pipeline import (
+    build_locked_identity_stubs,
+    run_phase3_experiment,
+)
 
 
 def quick_frame() -> pd.DataFrame:
@@ -90,3 +93,19 @@ def test_quick_phase3_pipeline_is_group_safe_and_deterministic(tmp_path: Path) -
     assert not predictions["person_key"].str.contains("P3[0-5]").any()
     assert output.baseline_diagnostics_parquet.exists()
     assert output.cumulative_load_parquet.exists()
+
+
+def test_locked_identity_stubs_preserve_datetime_dtype_without_sensor_reads() -> None:
+    source = quick_frame().loc[lambda value: value["split_role"].ne("locked_test")]
+    locked = quick_frame().loc[
+        lambda value: value["split_role"].eq("locked_test"),
+        ["dataset_id", "run_id", "person_id", "person_key", "split_role"],
+    ].drop_duplicates()
+
+    stubs = build_locked_identity_stubs(source, locked)
+
+    assert len(stubs) == 6
+    assert stubs["timestamp_utc"].isna().all()
+    assert isinstance(stubs["timestamp_utc"].dtype, pd.DatetimeTZDtype)
+    assert stubs["split_role"].eq("locked_test").all()
+    assert stubs["person_key"].tolist() == locked["person_key"].tolist()
