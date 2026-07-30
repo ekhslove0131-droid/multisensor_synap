@@ -20,6 +20,9 @@
    의존하지 않는가?
 5. 개인화로 event recall이 오르더라도 false alert와 calibration이 함께
    악화되지는 않는가?
+6. 같은 현재 편차에서도 과거의 누적 부하를 함께 보면 패턴 감지가 개선되는가?
+7. 높은 부하가 오래 지속될 때 개인 기준선이 이를 새로운 정상으로 흡수하지
+   않는가?
 
 ## 통제 비교
 
@@ -35,6 +38,8 @@ OOF fold와 평가 코드를 사용한다. 한 버전에서 바뀌는 변수는 
 | `P2-025` | 개인×환경 과거 기준선 | `0.25` |
 | `P2-050` | 개인×환경 과거 기준선 | `0.50` |
 | `P2-100` | 개인×환경 과거 기준선 | `1.00` |
+| `P2+CL` | 선택된 P2 + 다중 시간축 누적 부하 | 선택된 상한 |
+| `P2+CL-B` | P2+CL + 누적 부하의 제한적 기준선 영향 | 선택된 상한 |
 
 전역 기준선은 train person만으로 context별 median/MAD를 계산한다. 개인 기준선은
 각 사람의 과거값만 사용한다. `P2`는 같은 context의 과거값만 사용하고 해당
@@ -51,6 +56,55 @@ context의 이력이 부족하면 `G0`으로 축소한다.
 - median/MAD 계산에는 현재 행과 미래 행을 포함하지 않는다.
 - person, run, day, session 또는 1초 초과 시간 공백에서 시계열 피처 이력을
   초기화한다.
+
+## 누적 부하 상태
+
+안정 개인 기준선과 누적 부하 상태를 분리한다. 안정 기준선은 개인의 평상시
+중심값이고, 누적 부하는 최근 부하가 쌓이고 회복되는 동적 상태다. 누적 부하가
+높다는 이유로 안정 기준선을 그대로 따라 올리지 않는다.
+
+순간 부하는 현재 기준선으로 표준화한 다음 항목의 과거·현재값만 사용한다.
+
+- autonomic arousal
+- cognitive load
+- sensory context
+- sleep pressure
+- motor activation
+- social context
+- recovery capacity의 부족분
+
+event truth, phase, 행동 라벨과 모델 prediction은 누적 부하 계산에 사용하지
+않는다. 각 성분은 train person의 분포로만 robust scaling한다. autonomic
+arousal, cognitive load, sensory context와 sleep pressure의 양의 편차 및
+recovery capacity의 음의 편차를 동일 가중치로 합성한다. motor activation과
+social context는 ordinary activity와 문맥의 영향을 강하게 받으므로 단일 누적
+부하 수치에는 합치지 않고 시간축별 독립 피처로만 보존한다. downstream 패턴
+모델이 이 독립 피처의 유효성을 train OOF에서 학습한다.
+
+누적 부하는 다음 시간축을 별도 피처로 만든다.
+
+- `30m`: 급성 부하
+- `6h`: 같은 날 누적
+- `24h`: 하루 전체 부하
+- `72h`: 여러 날 지속 추세
+
+각 상태는 causal exponential decay와 recovery credit을 사용한다. 수면,
+낮은 각성, 높은 recovery capacity 구간에서는 부하가 감소할 수 있다. 72시간
+피처는 5일 합성데이터에서 mature support가 짧으므로 주 모델 선택이 아닌
+보조 감사 지표로도 별도 표시한다.
+
+`P2+CL`은 누적 부하를 모델 피처로만 사용한다. `P2+CL-B`는 누적 부하가
+개인 기준선 중심과 MAD에 주는 영향을 전역 MAD의 `10%` 이내로 제한한다.
+기준선 영향은 train OOF에서 사전 고정하며 validation 결과를 본 뒤 확대하지
+않는다.
+
+누적 부하 구간은 train 분포의 분위수로 다음 감사 상태를 만든다.
+
+- `LOW_LOAD`
+- `MEDIUM_LOAD`
+- `HIGH_LOAD`
+- `DECREASING_LOAD`
+- `RECOVERY_LOAD`
 
 ## 데이터 흐름과 누출 방지
 
@@ -108,6 +162,8 @@ validation은 선택된 전역 기준선 후보와 개인 기준선 후보를 �
 - ECE
 - context별 AUCPR/event F1
 - warm-up 포함 전체와 mature-personal 구간의 차이
+- 누적 부하 구간별 AUCPR/event F1
+- 누적 부하 30m/6h/24h/72h의 상승·감소 추세
 - 행동 라벨별 기존 보조 성능
 
 `accuracy`는 불균형 데이터에서 오해를 부를 수 있으므로 보조 표에만 기록하고
@@ -123,6 +179,7 @@ validation은 선택된 전역 기준선 후보와 개인 기준선 후보를 �
 3. 물리 `dataset_id` 36개
 4. validation person 6명
 5. context
+6. 누적 부하 구간
 
 각 그룹은 `G0`, personal, absolute delta와 relative delta를 함께 기록한다.
 분모가 0인 relative delta는 `NOT_COMPUTABLE`로 남긴다.
@@ -147,6 +204,9 @@ train 지표는 적합도와 OOF 선택 감사용이고, “정확도 상승” 
 3. false alerts/hour와 ECE가 각각 상대적으로 `5%` 넘게 악화되지 않는다.
 4. validation person의 과반에서 AUCPR 또는 event F1이 개선된다.
 5. 한 seed/run의 개선만으로 전체 평균 개선이 설명되지 않는다.
+6. `P2+CL`은 선택된 `P2`보다 person-macro AUCPR 또는 event F1이 개선되고
+   false alerts/hour가 상대적으로 `5%` 넘게 악화되지 않는다.
+7. `P2+CL-B`는 `P2+CL`보다 추가 이득이 없으면 채택하지 않는다.
 
 조건을 통과하지 못하면 `G0 유지`, `개인 가중치 축소` 또는
 `INSUFFICIENT_EVIDENCE`로 결론 내린다. 자동 승격과 자동 재학습은 하지 않는다.
@@ -157,6 +217,7 @@ train 지표는 적합도와 OOF 선택 감사용이고, “정확도 상승” 
 - `phase3_group_uplift.parquet`
 - `phase3_person_predictions.parquet`
 - `phase3_baseline_diagnostics.parquet`
+- `phase3_cumulative_load.parquet`
 - `phase3_manifest.json`
 - `reports/goal15_phase3_personal_pattern_ko.html`
 - 재현 가능한 Kaggle 노트북과 실행 metadata
