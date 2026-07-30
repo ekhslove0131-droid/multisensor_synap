@@ -93,7 +93,7 @@ git commit -m "feat: define Phase 3 validation contracts"
   - `baseline_policy_hash(...) -> str`
 - `mode` is one of `global_context`, `personal_pooled`, `personal_context`.
 
-- [ ] **Step 1: Write failing causal tests**
+- [x] **Step 1: Write failing causal tests**
 
 Prove:
 
@@ -105,7 +105,7 @@ Prove:
 - current row is excluded from personal median/MAD;
 - unknown context fails closed.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -115,13 +115,13 @@ Run:
 
 Expected: missing module/API failure.
 
-- [ ] **Step 3: Implement the minimal baseline engine**
+- [x] **Step 3: Implement the minimal baseline engine**
 
 Use stable ordering by `person_key`, `run_id`, `timestamp_utc`. Personal history
 is trailing-only. Refresh values every 60 seconds and forward-fill only within
 the same person and policy context. Apply `MAD_FLOOR=1e-4`.
 
-- [ ] **Step 4: Run GREEN, property tests, and commit**
+- [x] **Step 4: Run GREEN, property tests, and commit**
 
 Commit:
 
