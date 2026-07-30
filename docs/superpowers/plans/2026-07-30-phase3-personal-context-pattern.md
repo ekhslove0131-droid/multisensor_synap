@@ -151,7 +151,7 @@ git commit -m "feat: add causal personal-context baselines"
   - `load_state`
   - `load_slope_30m`
 
-- [ ] **Step 1: Write failing load-state tests**
+- [x] **Step 1: Write failing load-state tests**
 
 Prove:
 
@@ -164,7 +164,7 @@ Prove:
 - motor and social factors are excluded from the scalar composite but retained as independent horizon features;
 - 72-hour maturity is false before 259,200 valid seconds.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -172,7 +172,7 @@ Run:
 ./.venv/bin/pytest tests/test_cumulative_load.py -v
 ```
 
-- [ ] **Step 3: Implement causal decay**
+- [x] **Step 3: Implement causal decay**
 
 For horizon `h`, use:
 
@@ -185,7 +185,7 @@ The scalar load is the equal-weight mean of positive autonomic, cognitive,
 sensory and sleep-pressure deviations plus negative recovery deviation.
 Load-state quantiles are fit on train people only.
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 Commit:
 
