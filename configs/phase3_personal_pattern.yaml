@@ -1,0 +1,18 @@
+schema_version: goal1.5/phase3-personal-pattern/v1
+series_id: mvp3-oracle-v1
+split_counts:
+  train: 24
+  validation: 6
+  locked_test: 6
+warmup_sec: 1800
+lookback_sec: 21600
+refresh_sec: 60
+weight_caps: [0.0, 0.25, 0.5, 1.0]
+cumulative_horizons_sec: [1800, 21600, 86400, 259200]
+baseline_load_influence_cap: 0.10
+run_locked_test: false
+raw_root: ../data/raw
+outcome_root: ../data/outcomes
+registry_root: ../data/registry
+artifact_root: ../artifacts/phase3
+random_state: 20260730

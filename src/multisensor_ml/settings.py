@@ -6,6 +6,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+from multisensor_ml.phase3_contracts import Phase3Config
+
 
 class Goal15Config(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -98,5 +100,22 @@ def load_training_registry_config(path: Path) -> TrainingRegistryConfig:
             "outcome_root": (base / config.outcome_root).resolve(),
             "data_root": (base / config.data_root).resolve(),
             "input_receipt": (base / config.input_receipt).resolve(),
+        }
+    )
+
+
+def load_phase3_config(path: Path) -> Phase3Config:
+    source = path.resolve()
+    payload = yaml.safe_load(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Phase 3 config root must be a mapping")
+    config = Phase3Config.model_validate(payload)
+    base = source.parent
+    return config.model_copy(
+        update={
+            "raw_root": (base / config.raw_root).resolve(),
+            "outcome_root": (base / config.outcome_root).resolve(),
+            "registry_root": (base / config.registry_root).resolve(),
+            "artifact_root": (base / config.artifact_root).resolve(),
         }
     )

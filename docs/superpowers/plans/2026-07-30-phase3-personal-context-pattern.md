@@ -36,14 +36,14 @@
 - Produces: `BaselineVariant`, `CumulativeLoadConfig`, `Phase3Config`, `load_phase3_config(path: Path) -> Phase3Config`.
 - Candidate ids: `G0`, `P1-025`, `P1-050`, `P1-100`, `P2-025`, `P2-050`, `P2-100`, `P2+CL`, `P2+CL-B`.
 
-- [ ] **Step 1: Write failing schema tests**
+- [x] **Step 1: Write failing schema tests**
 
 Test exact candidate ids, caps `{0.0, 0.25, 0.5, 1.0}`, horizons
 `{1800, 21600, 86400, 259200}`, warm-up `1800`, lookback `21600`,
 refresh `60`, baseline load influence `0.10`, and rejection of any
 locked-test option.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -53,7 +53,7 @@ Run:
 
 Expected: import failure because `phase3_contracts` does not exist.
 
-- [ ] **Step 3: Implement strict Pydantic contracts and YAML loader**
+- [x] **Step 3: Implement strict Pydantic contracts and YAML loader**
 
 The loader must reject unknown fields and require:
 
@@ -70,7 +70,7 @@ baseline_load_influence_cap: 0.10
 run_locked_test: false
 ```
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 Run the focused test, Ruff and mypy for the new module, then commit:
 
