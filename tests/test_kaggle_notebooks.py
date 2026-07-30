@@ -28,6 +28,8 @@ NOTEBOOKS = [
     "02_ml_benchmark.ipynb",
     "03_dl_sequence_data.ipynb",
     "04_dl_tcn_benchmark.ipynb",
+    "05_phase3_source_prepare.ipynb",
+    "06_phase3_personal_pattern.ipynb",
 ]
 SHARED_CONSTANTS = (
     'SERIES_ID = "mvp3-oracle-v1"',
@@ -328,8 +330,31 @@ def test_notebooks_have_required_structure() -> None:
         assert notebook["metadata"]["kernelspec"]["name"] == "python3", path
 
 
-def test_kaggle_directory_contains_exactly_the_four_contract_notebooks() -> None:
+def test_kaggle_directory_contains_exactly_the_six_contract_notebooks() -> None:
     assert sorted(path.name for path in KAGGLE_DIR.glob("*.ipynb")) == NOTEBOOKS
+
+
+def test_phase3_notebook_chain_is_sequential_cpu_and_locked_test_closed() -> None:
+    source = notebook_source(
+        load_notebooks()[KAGGLE_DIR / "05_phase3_source_prepare.ipynb"]
+    )
+    pattern = notebook_source(
+        load_notebooks()[KAGGLE_DIR / "06_phase3_personal_pattern.ipynb"]
+    )
+
+    assert "prepare_phase3_source" in source
+    assert "phase3_source.parquet" in source
+    assert "locked_test_read" in source
+    assert "run_phase3_experiment" in pattern
+    assert "P2+CL-B" in pattern
+    assert "phase3_candidate_metrics.parquet" in pattern
+    assert "RUN_LOCKED_TEST = False" in source
+    assert "RUN_LOCKED_TEST = False" in pattern
+    for stem in ("05_phase3_source_prepare", "06_phase3_personal_pattern"):
+        metadata = json.loads((KAGGLE_DIR / f"{stem}.kernel-metadata.json").read_text())
+        assert metadata["enable_gpu"] is False
+        assert metadata["enable_internet"] is False
+        assert metadata["is_private"] is True
 
 
 def test_ruff_excludes_unexecuted_notebooks_and_sdd_workspace() -> None:

@@ -323,12 +323,12 @@ git commit -m "feat: run Phase 3 personal-pattern ablation"
 - 05 consumes the private raw Oracle source and emits a sanitized, hash-bound Phase 3 source.
 - 06 consumes only 05 output and emits the Phase 3 metrics, uplift, predictions, diagnostics and manifest.
 
-- [ ] **Step 1: Write failing notebook contract tests**
+- [x] **Step 1: Write failing notebook contract tests**
 
 Require private kernels, CPU, internet off, `RUN_LOCKED_TEST=False`, exact
 05→06 kernel-source handoff, Oracle denylist enforcement, and output schemas.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -336,12 +336,12 @@ Run:
 ./.venv/bin/pytest tests/test_kaggle_notebooks.py -k phase3 -v
 ```
 
-- [ ] **Step 3: Create standalone notebooks**
+- [x] **Step 3: Create standalone notebooks**
 
 Keep all default execution flags false in Git. The staging copy alone enables
 the requested run. Do not duplicate arbitrary pickle/joblib persistence.
 
-- [ ] **Step 4: Run notebook/static verification and commit**
+- [x] **Step 4: Run notebook/static verification and commit**
 
 Commit:
 

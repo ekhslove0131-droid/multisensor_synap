@@ -1,0 +1,15 @@
+{
+  "id": "bjcoding/multisensor-goal1-5-06-phase3-pattern",
+  "title": "Multisensor Goal 1.5 06 Phase 3 Pattern",
+  "code_file": "06_phase3_personal_pattern.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "bjcoding/multisensor-goal1-5-05-phase3-source"
+  ]
+}

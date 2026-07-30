@@ -1,0 +1,15 @@
+{
+  "id": "bjcoding/multisensor-goal1-5-05-phase3-source",
+  "title": "Multisensor Goal 1.5 05 Phase 3 Source",
+  "code_file": "05_phase3_source_prepare.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "dataset_sources": [
+    "bjcoding/multisensor-goal1-5-phase3-raw-source"
+  ],
+  "competition_sources": [],
+  "kernel_sources": []
+}
