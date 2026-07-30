@@ -209,7 +209,7 @@ git commit -m "feat: add causal cumulative-load state"
   - `select_smallest_stable_cap(oof_metrics, *, relative_guardrail=0.05) -> str`
   - `phase3_adoption_decision(metrics, uplift) -> str`
 
-- [ ] **Step 1: Write failing metric tests**
+- [x] **Step 1: Write failing metric tests**
 
 Test exact absolute and relative deltas for:
 
@@ -224,7 +224,7 @@ Test `NOT_COMPUTABLE` for a zero denominator, `INSUFFICIENT_SUPPORT` for a
 single-class group, and improvement/tie/degradation counts. Prove that accuracy
 is exported but never used in selection.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -232,13 +232,13 @@ Run:
 ./.venv/bin/pytest tests/test_phase3_evaluation.py -v
 ```
 
-- [ ] **Step 3: Implement group-safe evaluation**
+- [x] **Step 3: Implement group-safe evaluation**
 
 Use the existing segment-aware event contract. Group metrics must never merge
 events across dataset, person, day, session or a time gap. `G0` is always the
 uplift denominator.
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 Commit:
 
