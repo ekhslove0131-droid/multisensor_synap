@@ -5,7 +5,19 @@ import json
 from pathlib import Path
 from typing import cast
 
+import pandas as pd
+
 from multisensor_ml.factory import run_synthetic_factory
+from multisensor_ml.kaggle_model_contracts import load_kaggle_model_package_config
+from multisensor_ml.kaggle_model_package import (
+    build_kaggle_model_package,
+    verify_kaggle_model_package,
+)
+from multisensor_ml.kaggle_reproduce import (
+    compare_expected,
+    load_hierarchical_package,
+    predict_hierarchical,
+)
 from multisensor_ml.knime import export_knime_artifacts
 from multisensor_ml.materialize import materialize_synthetic
 from multisensor_ml.model_registry import ModelRegistry, import_oracle_bundle
@@ -142,6 +154,21 @@ def build_parser() -> argparse.ArgumentParser:
     run_all = subparsers.add_parser("run-all")
     run_all.add_argument("--config", type=Path, required=True)
 
+    kaggle_model = subparsers.add_parser("kaggle-model")
+    kaggle_model_commands = kaggle_model.add_subparsers(
+        dest="kaggle_model_command", required=True
+    )
+    kaggle_package = kaggle_model_commands.add_parser("package")
+    kaggle_package.add_argument("--config", type=Path, required=True)
+    kaggle_package.add_argument("--wheel", type=Path, required=True)
+    kaggle_verify = kaggle_model_commands.add_parser("verify")
+    kaggle_verify.add_argument("--package", type=Path, required=True)
+    kaggle_reproduce = kaggle_model_commands.add_parser("reproduce")
+    kaggle_reproduce.add_argument("--model-root", type=Path, required=True)
+    kaggle_reproduce.add_argument("--input", type=Path, required=True)
+    kaggle_reproduce.add_argument("--output", type=Path, required=True)
+    kaggle_reproduce.add_argument("--expected", type=Path)
+
     phase3 = subparsers.add_parser("phase3")
     phase3_commands = phase3.add_subparsers(dest="phase3_command", required=True)
     for phase3_command in ("prepare", "train-validate", "report-input"):
@@ -165,6 +192,60 @@ def _emit(**payload: object) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "kaggle-model":
+        if args.kaggle_model_command == "package":
+            config = load_kaggle_model_package_config(args.config)
+            package = build_kaggle_model_package(config, args.wheel)
+            verified = verify_kaggle_model_package(package.root)
+            _emit(
+                status="PACKAGED",
+                package_root=str(package.root),
+                archive_sha256=verified["archive_sha256"],
+                locked_test_read=False,
+            )
+            return 0
+        if args.kaggle_model_command == "verify":
+            verified = verify_kaggle_model_package(args.package)
+            _emit(
+                status="VERIFIED",
+                archive_sha256=verified["archive_sha256"],
+                reproduction_status=verified["reproduction_status"],
+                locked_test_read=False,
+            )
+            return 0
+        if args.kaggle_model_command == "reproduce":
+            model_root = args.model_root.resolve()
+            if not (model_root / "payload_manifest.json").is_file():
+                model_root = model_root / "extracted"
+            loaded_package = load_hierarchical_package(model_root)
+            frame = pd.read_parquet(args.input)
+            prediction = predict_hierarchical(loaded_package, frame)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            prediction.to_parquet(args.output, index=False)
+            if args.expected is None:
+                _emit(
+                    status="PREDICTED",
+                    rows=len(prediction),
+                    output=str(args.output.resolve()),
+                    locked_test_read=False,
+                )
+                return 0
+            comparison = compare_expected(
+                prediction, pd.read_parquet(args.expected)
+            )
+            _emit(
+                status=comparison.status,
+                compared_rows=comparison.compared_rows,
+                first_mismatch_column=comparison.first_mismatch_column,
+                first_mismatch_key=comparison.first_mismatch_key,
+                output=str(args.output.resolve()),
+                locked_test_read=False,
+            )
+            return 0 if comparison.status == "REPRODUCED" else 1
+        raise AssertionError(
+            f"unhandled Kaggle model command: {args.kaggle_model_command}"
+        )
+
     if args.command == "factory":
         if args.factory_command == "run":
             factory_config = load_factory_config(args.config)

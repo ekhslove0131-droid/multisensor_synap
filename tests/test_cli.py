@@ -13,6 +13,7 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
         "evaluate",
         "export-knime",
         "factory",
+        "kaggle-model",
             "materialize-synthetic",
             "phase3",
             "prepare",
@@ -64,3 +65,38 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
     )
     assert registry.registry_command == "run-stage"
     assert registry.stage == "stage-model"
+
+
+def test_kaggle_model_commands_parse() -> None:
+    parser = build_parser()
+    package = parser.parse_args(
+        [
+            "kaggle-model",
+            "package",
+            "--config",
+            "config.yaml",
+            "--wheel",
+            "model.whl",
+        ]
+    )
+    verify = parser.parse_args(
+        ["kaggle-model", "verify", "--package", "dist/model"]
+    )
+    reproduce = parser.parse_args(
+        [
+            "kaggle-model",
+            "reproduce",
+            "--model-root",
+            "payload",
+            "--input",
+            "sample.parquet",
+            "--output",
+            "prediction.parquet",
+            "--expected",
+            "expected.parquet",
+        ]
+    )
+
+    assert package.kaggle_model_command == "package"
+    assert verify.kaggle_model_command == "verify"
+    assert reproduce.kaggle_model_command == "reproduce"
