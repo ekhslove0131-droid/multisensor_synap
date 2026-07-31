@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import gzip
 import json
 import shutil
+import tarfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+import numpy as np
+import pandas as pd
 import skops.io as sio
 
 from multisensor_ml.kaggle_model_contracts import (
@@ -17,6 +22,15 @@ from multisensor_ml.kaggle_model_contracts import (
 from multisensor_ml.registry import sha256_file
 
 FORBIDDEN_SUFFIXES = {".pkl", ".pickle", ".joblib"}
+
+
+@dataclass(frozen=True, slots=True)
+class KaggleModelPackage:
+    root: Path
+    extracted: Path
+    archive: Path
+    manifest: Path
+    checksums: Path
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -182,4 +196,200 @@ def verify_payload(payload_root: Path) -> dict[str, object]:
             raise ValueError(f"skops unknown type mismatch: {entry['path']}")
     if any(path.suffix in FORBIDDEN_SUFFIXES for path in root.rglob("*")):
         raise ValueError("forbidden pickle extension in payload")
+    return manifest
+
+
+def _refresh_payload_hashes(root: Path) -> dict[str, object]:
+    manifest_path = root / "payload_manifest.json"
+    manifest = _read_json(manifest_path)
+    manifest["files"] = {
+        str(path.relative_to(root)): sha256_file(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path != manifest_path
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return manifest
+
+
+def _write_deterministic_archive(source: Path, destination: Path) -> None:
+    with (
+        destination.open("wb") as raw,
+        gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed,
+        tarfile.open(fileobj=compressed, mode="w") as archive,
+    ):
+        for path in sorted(source.rglob("*")):
+            if not path.is_file():
+                continue
+            info = archive.gettarinfo(
+                str(path), arcname=str(path.relative_to(source))
+            )
+            info.uid = 0
+            info.gid = 0
+            info.uname = ""
+            info.gname = ""
+            info.mtime = 0
+            with path.open("rb") as handle:
+                archive.addfile(info, handle)
+
+
+def _select_sample(config: KaggleModelPackageConfig) -> tuple[pd.DataFrame, dict[str, object]]:
+    prepared = config.project_root / "data/prepared" / config.series_id
+    manifest = _read_json(prepared / "manifest.json")
+    people = cast(list[dict[str, object]], manifest["people"])
+    candidates = sorted(
+        (entry for entry in people if entry["split_role"] == config.sample_split_role),
+        key=lambda entry: str(entry["person_key"]),
+    )
+    if not candidates:
+        raise ValueError("sample split contains no people")
+    entry = candidates[0]
+    frame = pd.read_parquet(prepared / str(entry["path"]))
+    if "session_id" not in frame:
+        frame["session_id"] = f"dataset-{entry['dataset_id']}"
+    event_binary = frame.get("event_binary", pd.Series(0, index=frame.index))
+    positive = np.flatnonzero(event_binary.to_numpy() == 1)
+    anchor = int(positive[0]) if len(positive) else 0
+    start = max(0, anchor - min(300, config.sample_rows // 2))
+    if start + config.sample_rows > len(frame):
+        start = max(0, len(frame) - config.sample_rows)
+    selected = frame.iloc[start : start + config.sample_rows].copy()
+    feature_names = [str(value) for value in cast(list[object], manifest["feature_names"])]
+    columns = ["person_key", "session_id", "timestamp_utc", *feature_names]
+    selected = selected[columns]
+    metadata: dict[str, object] = {
+        "sample_split_role": config.sample_split_role,
+        "sample_rows": len(selected),
+        "person_key": str(entry["person_key"]),
+        "dataset_id": str(entry["dataset_id"]),
+        "anchor_row": anchor,
+        "locked_test_read": False,
+    }
+    return selected, metadata
+
+
+def build_kaggle_model_package(
+    config: KaggleModelPackageConfig, wheel: Path
+) -> KaggleModelPackage:
+    from multisensor_ml.kaggle_reproduce import (
+        compare_expected,
+        load_hierarchical_package,
+        predict_hierarchical,
+    )
+
+    root = config.output_root.resolve()
+    if root.exists():
+        raise FileExistsError(f"Kaggle model package already exists: {root}")
+    root.mkdir(parents=True)
+    extracted = root / "extracted"
+    collect_hierarchical_payload(config, extracted, wheel)
+    sample, sample_metadata = _select_sample(config)
+    sample_root = extracted / "sample"
+    sample_root.mkdir()
+    sample.to_parquet(sample_root / "sample_input.parquet", index=False)
+    loaded = load_hierarchical_package(extracted)
+    expected = predict_hierarchical(loaded, sample)
+    expected.to_parquet(sample_root / "expected_output.parquet", index=False)
+    (sample_root / "sample_manifest.json").write_text(
+        json.dumps(sample_metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    _refresh_payload_hashes(extracted)
+    verify_payload(extracted)
+    comparison = compare_expected(
+        predict_hierarchical(load_hierarchical_package(extracted), sample), expected
+    )
+    if comparison.status != "REPRODUCED":
+        raise ValueError("packaged sample did not reproduce")
+
+    archive = root / "model_payload.tar.gz"
+    _write_deterministic_archive(extracted, archive)
+    manifest_path = root / "model_manifest.json"
+    outer_manifest: dict[str, object] = {
+        "schema_version": PACKAGE_SCHEMA,
+        "status": MODEL_STATUS,
+        "real_data_status": REAL_DATA_STATUS,
+        "release_status": "candidate",
+        "archive_path": archive.name,
+        "archive_sha256": sha256_file(archive),
+        "archive_size_bytes": archive.stat().st_size,
+        "source_dataset_handle": config.source_dataset_handle,
+        "source_dataset_version": config.source_dataset_version,
+        "reproduction_status": comparison.status,
+        **sample_metadata,
+    }
+    manifest_path.write_text(
+        json.dumps(outer_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    checksums = root / "SHA256SUMS"
+    checksums.write_text(
+        "".join(
+            f"{sha256_file(path)}  {path.name}\n"
+            for path in (archive, manifest_path)
+        ),
+        encoding="utf-8",
+    )
+    (root / "model-metadata.json").write_text(
+        json.dumps(
+            {
+                "title": "Multisensor Goal 1.5 Hierarchical Synthetic Model",
+                "id": f"{config.owner_slug}/{config.model_slug}",
+                "isPrivate": True,
+                "licenses": [{"name": config.license_name}],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (root / "model-instance-metadata.json").write_text(
+        json.dumps(
+            {
+                "ownerSlug": config.owner_slug,
+                "modelSlug": config.model_slug,
+                "instanceSlug": config.variation_slug,
+                "framework": config.framework,
+                "isPrivate": True,
+                "fineTunable": False,
+                "licenseName": config.license_name,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    package = KaggleModelPackage(root, extracted, archive, manifest_path, checksums)
+    verify_kaggle_model_package(root)
+    return package
+
+
+def verify_kaggle_model_package(package_root: Path) -> dict[str, object]:
+    from multisensor_ml.kaggle_reproduce import (
+        compare_expected,
+        load_hierarchical_package,
+        predict_hierarchical,
+    )
+
+    root = package_root.resolve()
+    manifest = _read_json(root / "model_manifest.json")
+    archive = root / str(manifest["archive_path"])
+    if sha256_file(archive) != manifest["archive_sha256"]:
+        raise ValueError("outer package hash mismatch: model_payload.tar.gz")
+    for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+        checksum_expected, name = line.split("  ", maxsplit=1)
+        if sha256_file(root / name) != checksum_expected:
+            raise ValueError(f"outer package hash mismatch: {name}")
+    extracted = root / "extracted"
+    verify_payload(extracted)
+    sample = pd.read_parquet(extracted / "sample/sample_input.parquet")
+    expected = pd.read_parquet(extracted / "sample/expected_output.parquet")
+    actual = predict_hierarchical(load_hierarchical_package(extracted), sample)
+    result = compare_expected(actual, expected)
+    if result.status != "REPRODUCED":
+        raise ValueError(
+            f"sample reproduction failed: {result.first_mismatch_column}"
+        )
+    manifest["reproduction_status"] = result.status
     return manifest

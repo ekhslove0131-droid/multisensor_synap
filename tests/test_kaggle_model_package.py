@@ -4,9 +4,12 @@ from pathlib import Path
 import pytest
 
 from multisensor_ml.kaggle_model_package import (
+    build_kaggle_model_package,
     collect_hierarchical_payload,
+    verify_kaggle_model_package,
     verify_payload,
 )
+from multisensor_ml.registry import sha256_file
 
 
 def test_collected_payload_has_every_hierarchical_head(
@@ -58,3 +61,40 @@ def test_verify_payload_checks_declared_unknown_types(
 
     with pytest.raises(ValueError, match="unknown type"):
         verify_payload(root)
+
+
+def test_built_package_contains_reproducible_validation_sample(
+    package_config, built_wheel: Path
+) -> None:
+    package = build_kaggle_model_package(package_config, built_wheel)
+
+    assert package.archive.name == "model_payload.tar.gz"
+    assert package.manifest.name == "model_manifest.json"
+    verified = verify_kaggle_model_package(package.root)
+    assert verified["sample_split_role"] == "validation"
+    assert verified["locked_test_read"] is False
+    assert verified["sample_rows"] == 60
+    assert verified["reproduction_status"] == "REPRODUCED"
+
+
+def test_repeated_builds_have_identical_archive_hash(
+    package_config, built_wheel: Path, tmp_path: Path
+) -> None:
+    first = build_kaggle_model_package(
+        package_config.model_copy(update={"output_root": tmp_path / "a"}), built_wheel
+    )
+    second = build_kaggle_model_package(
+        package_config.model_copy(update={"output_root": tmp_path / "b"}), built_wheel
+    )
+
+    assert sha256_file(first.archive) == sha256_file(second.archive)
+
+
+def test_outer_verifier_rejects_archive_tamper(
+    package_config, built_wheel: Path
+) -> None:
+    package = build_kaggle_model_package(package_config, built_wheel)
+    package.archive.write_bytes(package.archive.read_bytes() + b"tamper")
+
+    with pytest.raises(ValueError, match="outer package hash mismatch"):
+        verify_kaggle_model_package(package.root)
