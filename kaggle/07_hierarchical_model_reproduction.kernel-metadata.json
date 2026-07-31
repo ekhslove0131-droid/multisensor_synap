@@ -1,0 +1,14 @@
+{
+  "id": "bjcoding/multisensor-goal15-hierarchical-reproduction",
+  "title": "Multisensor Goal 1.5 Hierarchical Model Reproduction",
+  "code_file": "07_hierarchical_model_reproduction.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "dataset_sources": [
+    "bjcoding/multisensor-goal15-oracle-mvp3"
+  ],
+  "model_sources": []
+}
