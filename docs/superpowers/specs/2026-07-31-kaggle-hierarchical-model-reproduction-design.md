@@ -32,10 +32,12 @@
 권장 handle은 다음과 같다.
 
 ```text
-bjcoding/multisensor-goal15-hierarchical/sklearn/oracle-sanity-v1
+bjcoding/multisensor-goal15-hierarchical/scikitLearn/oracle-sanity-v1
 ```
 
-Kaggle의 상위 Model 아래에 `sklearn` framework와 `oracle-sanity-v1` variation을 둔다. Kaggle의 공식 Model/Variation 구조와 CLI 계약을 따른다.
+Kaggle의 상위 Model 아래에 Kaggle CLI 2.2.4 enum과 일치하는 `scikitLearn`
+framework와 `oracle-sanity-v1` variation을 둔다. Kaggle의 공식 Model/Variation
+구조와 CLI 계약을 따른다.
 
 ### 3.2 포함 모델
 
@@ -211,7 +213,7 @@ python -m multisensor_ml.kaggle_reproduce \
 
 ### Kaggle
 
-- 비공개 Model과 `sklearn/oracle-sanity-v1` variation 생성
+- 비공개 Model과 `scikitLearn/oracle-sanity-v1` variation 생성
 - 원격 파일명·크기·hash readback 일치
 - 비공개 재현 notebook `Run All` 성공
 - 최종 셀에 `REPRODUCED` 표시
