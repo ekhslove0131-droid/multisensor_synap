@@ -87,6 +87,8 @@ else
     "${current_manifest}")"
   if [[ "${remote_hash}" == "${local_hash}" ]]; then
     status="REUSED"
+    version="${current_version}"
+    remote_manifest="${current_manifest}"
   else
     kaggle models variations versions create "${remote_variation_handle}" \
       -p "${package_root}" -n "Verified hierarchical oracle/sanity candidate" -r skip
@@ -94,8 +96,10 @@ else
   fi
 fi
 
-version="$(latest_version)"
-remote_manifest="$(download_and_verify "${version}")"
+if [[ "${status}" != "REUSED" ]]; then
+  version="$(latest_version)"
+  remote_manifest="$(download_and_verify "${version}")"
+fi
 remote_hash="$(${repo_root}/.venv/bin/python -c \
   'import json,sys; print(json.load(open(sys.argv[1]))["archive_sha256"])' \
   "${remote_manifest}")"

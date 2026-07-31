@@ -152,7 +152,11 @@ def collect_hierarchical_payload(
     if set(selected_behaviors) != set(BEHAVIOR_CODES):
         raise ValueError("selected behavior model mapping is incomplete")
 
-    _copy(wheel.resolve(), root / "wheel" / wheel.name)
+    wheelhouse = sorted(wheel.resolve().parent.glob("*.whl"))
+    if wheel.resolve() not in (path.resolve() for path in wheelhouse):
+        raise FileNotFoundError(f"project wheel is not in its wheelhouse: {wheel}")
+    for wheel_file in wheelhouse:
+        _copy(wheel_file, root / "wheel" / wheel_file.name)
     _copy(project / "uv.lock", root / "uv.lock")
     forbidden = [path for path in root.rglob("*") if path.suffix in FORBIDDEN_SUFFIXES]
     if forbidden:

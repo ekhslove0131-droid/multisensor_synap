@@ -19,6 +19,7 @@ def test_publish_script_is_private_hash_gated_and_non_destructive() -> None:
     assert script.index("versions list") < script.index("kaggle models create")
     assert "variations get" not in script
     assert "--untar -f -q >/dev/null" in script
+    assert 'if [[ "${status}" != "REUSED" ]]' in script
     assert "KAGGLE_API_TOKEN" not in script
     assert "models delete" not in script
     assert "kernels push" not in script

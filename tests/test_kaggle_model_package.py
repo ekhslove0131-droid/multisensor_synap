@@ -39,6 +39,18 @@ def test_payload_has_no_unsafe_pickle_extensions(
     assert not [path for path in root.rglob("*") if path.suffix in forbidden]
 
 
+def test_payload_copies_adjacent_offline_dependency_wheels(
+    package_config, built_wheel: Path, tmp_path: Path
+) -> None:
+    dependency = built_wheel.parent / "skops-0.13.0-py3-none-any.whl"
+    dependency.write_bytes(b"offline-wheel-fixture")
+    root = tmp_path / "payload"
+
+    collect_hierarchical_payload(package_config, root, built_wheel)
+
+    assert (root / "wheel" / dependency.name).read_bytes() == dependency.read_bytes()
+
+
 def test_verify_payload_rejects_tampered_model(
     package_config, built_wheel: Path, tmp_path: Path
 ) -> None:
