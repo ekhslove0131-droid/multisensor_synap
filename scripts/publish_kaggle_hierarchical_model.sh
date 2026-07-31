@@ -41,10 +41,11 @@ if versions:
 }
 
 latest_version() {
+  local minimum_version="${1:-1}"
   local version
   for attempt in {1..12}; do
     version="$(latest_version_once || true)"
-    if [[ -n "${version}" ]]; then
+    if [[ -n "${version}" ]] && (( version >= minimum_version )); then
       printf '%s\n' "${version}"
       return 0
     fi
@@ -55,6 +56,7 @@ latest_version() {
 }
 
 variation_exists=false
+expected_version=1
 current_version="$(latest_version_once || true)"
 if [[ -n "${current_version}" ]]; then
   variation_exists=true
@@ -90,6 +92,7 @@ else
     version="${current_version}"
     remote_manifest="${current_manifest}"
   else
+    expected_version="$((current_version + 1))"
     kaggle models variations versions create "${remote_variation_handle}" \
       -p "${package_root}" -n "Verified hierarchical oracle/sanity candidate" -r skip
     status="VERSIONED"
@@ -97,7 +100,7 @@ else
 fi
 
 if [[ "${status}" != "REUSED" ]]; then
-  version="$(latest_version)"
+  version="$(latest_version "${expected_version}")"
   remote_manifest="$(download_and_verify "${version}")"
 fi
 remote_hash="$(${repo_root}/.venv/bin/python -c \

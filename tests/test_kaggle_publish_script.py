@@ -13,6 +13,9 @@ def test_publish_script_is_private_hash_gated_and_non_destructive() -> None:
     assert "archive_sha256" in script
     assert "row.get(\"versionNumber\", row.get(\"version\"))" in script
     assert "for attempt in {1..12}" in script
+    assert 'local minimum_version="${1:-1}"' in script
+    assert '(( version >= minimum_version ))' in script
+    assert 'expected_version="$((current_version + 1))"' in script
     assert "remote_variation_handle" in script
     assert "/ScikitLearn/oracle-sanity-v1" in script
     assert "--untar" in script

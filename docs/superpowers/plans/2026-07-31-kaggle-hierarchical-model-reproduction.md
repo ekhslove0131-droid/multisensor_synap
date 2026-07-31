@@ -263,7 +263,7 @@ git commit -m "feat: collect immutable hierarchical model payload"
 
 **Interfaces:**
 - Consumes: verified logical payload and a prepared Parquet frame containing exact stage feature columns.
-- Produces: `load_hierarchical_package(root: Path) -> LoadedHierarchicalPackage`; `prepare_hierarchical_input(package: LoadedHierarchicalPackage, frame: pd.DataFrame) -> pd.DataFrame`; `predict_hierarchical(package: LoadedHierarchicalPackage, frame: pd.DataFrame) -> pd.DataFrame`; `compare_expected(actual: pd.DataFrame, expected: pd.DataFrame, *, probability_atol: float = 1e-8) -> ReproductionResult`. The tolerance permits bounded Linux/macOS floating-point roundoff while categorical outputs remain exact; a `0.01` probability change must still fail.
+- Produces: `load_hierarchical_package(root: Path) -> LoadedHierarchicalPackage`; `prepare_hierarchical_input(package: LoadedHierarchicalPackage, frame: pd.DataFrame) -> pd.DataFrame`; `predict_hierarchical(package: LoadedHierarchicalPackage, frame: pd.DataFrame) -> pd.DataFrame`; `compare_expected(actual: pd.DataFrame, expected: pd.DataFrame, *, probability_atol: float = 1e-6) -> ReproductionResult`. Kaggle Linux diagnostics measured a maximum `2.682209e-7` difference in three logistic behavior probabilities while all categorical outputs matched, so the bounded tolerance is evidence-based; a `0.01` probability change must still fail.
 
 - [ ] **Step 1: Write failing tests for strict schema and deterministic output**
 

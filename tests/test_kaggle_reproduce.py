@@ -91,7 +91,7 @@ def test_compare_expected_accepts_cross_platform_probability_roundoff(
 ) -> None:
     actual = predict_hierarchical(loaded_package, sample_frame)
     expected = actual.copy()
-    expected.loc[0, "ear_covering"] += 5e-9
+    expected.loc[0, "ear_covering"] += 5e-7
 
     result = compare_expected(actual, expected)
 
