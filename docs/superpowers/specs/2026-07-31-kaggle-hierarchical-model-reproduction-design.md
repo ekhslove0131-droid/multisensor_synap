@@ -24,6 +24,7 @@
 - 금지 형식: `.pkl`, `.pickle`, `.joblib`
 - 모델 입력에는 hidden archetype, event intensity truth, event truth ID 등 금지된 truth 열을 넣지 않는다.
 - Kaggle Model과 재현 노트북은 모두 비공개로 등록한다.
+- Kaggle 필수 license metadata는 팀 재현용 모델 코드에 `Apache 2.0`을 사용한다.
 
 ## 3. 배포 단위
 
@@ -90,6 +91,12 @@ multisensor-goal15-hierarchical/
 ```
 
 대용량 10GB 합성데이터는 모델 패키지에 중복하지 않는다. 기존 비공개 Kaggle Dataset을 별도 Input으로 연결한다.
+
+Kaggle CLI 2.2.4는 variation upload에서 하위 디렉터리를 그대로 보존하지
+않으므로, 위 논리 구조를 결정적 `model_payload.tar.gz` 하나에 담는다. 원격
+variation의 최상위에는 archive, `model_manifest.json`, `SHA256SUMS`, 한글 문서와
+`model-instance-metadata.json`만 둔다. 재현 노트북은 archive를 임시 작업 폴더에
+해제한 뒤 논리 구조와 내부 hash를 검증한다.
 
 ## 4. 재현 노트북
 
