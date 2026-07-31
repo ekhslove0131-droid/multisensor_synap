@@ -42,6 +42,11 @@ def hierarchical_source(tmp_path: Path) -> Path:
     hgb = HistGradientBoostingClassifier(random_state=7, min_samples_leaf=1).fit(
         x_binary, y_binary
     )
+    x_behavior = np.column_stack([x_binary, np.asarray([0.1, 0.2, 0.8, 0.9])])
+    behavior_logistic = LogisticRegression(random_state=7).fit(x_behavior, y_binary)
+    behavior_hgb = HistGradientBoostingClassifier(
+        random_state=7, min_samples_leaf=1
+    ).fit(x_behavior, y_binary)
     x_stage = np.asarray([[float(index), 1.0] for index in range(10)])
     y_stage = np.asarray([index % 5 for index in range(10)])
     stage_hgb = HistGradientBoostingClassifier(
@@ -145,8 +150,8 @@ def hierarchical_source(tmp_path: Path) -> Path:
     for code in BEHAVIOR_CODES:
         selected[code] = "logistic_regression"
         for name, model in {
-            "hist_gradient_boosting": hgb,
-            "logistic_regression": logistic,
+            "hist_gradient_boosting": behavior_hgb,
+            "logistic_regression": behavior_logistic,
         }.items():
             filename = f"behavior__{code}__{name}.skops"
             behavior_entries.append(
