@@ -1,0 +1,18 @@
+schema_version: goal1.5/kaggle-model-package-config/v1
+project_root: .
+series_id: mvp3-oracle-v1
+output_root: dist/kaggle-model/multisensor-goal15-hierarchical
+owner_slug: bjcoding
+model_slug: multisensor-goal15-hierarchical
+framework: scikitLearn
+variation_slug: oracle-sanity-v1
+source_dataset_handle: bjcoding/multisensor-goal15-oracle-mvp3
+source_dataset_version: 1
+license_name: Apache 2.0
+notebook_slug: multisensor-goal15-hierarchical-reproduction
+is_private: true
+run_training: false
+run_locked_test: false
+use_gpu: false
+sample_split_role: validation
+sample_rows: 600
