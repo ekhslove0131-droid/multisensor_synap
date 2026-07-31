@@ -1,0 +1,237 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "3차 개인 기준선·누적 부하 패턴 검증 보고서",
+    "description": "구축 범위, Kaggle 실행 병목, 시행착오와 다음 구조를 기록한 기술 보고서.",
+    "generatedAt": "2026-07-31T10:00:00+09:00",
+    "charts": [
+      {
+        "id": "phase3_stage_progress",
+        "title": "3차 파이프라인 단계별 상태",
+        "subtitle": "05 source 준비까지 완료됐지만 06 학습은 커널 종료로 결과를 만들지 못했다.",
+        "type": "bar",
+        "dataset": "phase3_status",
+        "source": {
+          "id": "phase3_stage_progress_source",
+          "label": "단계별 구현·실행 상태",
+          "query": {
+            "sql": "SELECT 'raw source 업로드' AS stage, 100 AS completion, '완료' AS status, '비공개 876MB' AS evidence\nUNION ALL SELECT '05 source 준비', 100, '완료', '12,960,000행·30명'\nUNION ALL SELECT '06 후보 학습', 0, '실패', '24,505초 후 DeadKernelError'\nUNION ALL SELECT 'validation uplift', 0, '미산출', 'candidate output 없음'\nUNION ALL SELECT 'locked test', 0, '미사용', '계약상 차단'",
+            "description": "검토한 계획 체크박스와 실행 기록을 단계·완료율·상태·근거로 정규화했다.",
+            "tables_used": [],
+            "filters": [
+              "완료율은 모델 성능이 아닌 구현·실행 상태"
+            ],
+            "metric_definitions": {
+              "completion": "검토 시점에 완료되고 증거가 남은 단계는 100, 미실행·실패·미산출 단계는 0."
+            }
+          }
+        },
+        "layout": "wide",
+        "encodings": {
+          "x": {
+            "field": "stage",
+            "type": "nominal",
+            "label": "단계"
+          },
+          "y": {
+            "field": "completion",
+            "type": "quantitative",
+            "label": "완료율"
+          },
+          "tooltip": [
+            {
+              "field": "status",
+              "type": "text",
+              "label": "상태"
+            },
+            {
+              "field": "evidence",
+              "type": "text",
+              "label": "근거"
+            }
+          ]
+        },
+        "yAxisTitle": "%",
+        "valueFormat": "number"
+      }
+    ],
+    "sources": [
+      {
+        "id": "phase3_plan",
+        "label": "3차 개인·환경 기준선 검증 구현 계획",
+        "path": "docs/superpowers/plans/2026-07-30-phase3-personal-context-pattern.md"
+      },
+      {
+        "id": "phase3_design",
+        "label": "3차 개인·환경 기준선 검증 설계",
+        "path": "docs/superpowers/specs/2026-07-30-phase3-personal-context-pattern-design.md"
+      },
+      {
+        "id": "phase3_git",
+        "label": "3차 구현 브랜치",
+        "href": "https://github.com/ekhslove0131-droid/multisensor_synap/tree/codex/kaggle-ml-dl-benchmark",
+        "description": "계약, 기준선, 누적 부하, uplift, pipeline과 Kaggle notebook 구현."
+      },
+      {
+        "id": "kaggle_source",
+        "label": "Kaggle Phase 3 source notebook",
+        "href": "https://www.kaggle.com/code/bjcoding/multisensor-goal-1-5-05-phase-3-source",
+        "description": "12,960,000행의 train·validation sanitized source를 생성."
+      },
+      {
+        "id": "kaggle_pattern",
+        "label": "Kaggle Phase 3 pattern notebook",
+        "href": "https://www.kaggle.com/code/bjcoding/multisensor-goal-1-5-06-phase-3-pattern",
+        "description": "최종 실행은 24,505초 뒤 DeadKernelError; 결과 파일 없음."
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# 3차 개인 기준선·누적 부하 패턴 검증 보고서\n\n**작성 기준:** 2026년 7월 31일 · **데이터 상태:** `oracle/sanity` · **실제 정확도:** `NOT VERIFIED` · **locked test:** 미사용"
+      },
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "sourceId": "kaggle_pattern",
+        "body": "## 3차의 결론: 구조는 만들었지만 성능 비교는 끝나지 않았다\n\n전역 context 기준선 G0와 causal 개인 기준선, 개인·context 기준선, 누적 부하 후보를 동일 label·sampling·estimator로 비교하는 구조를 구축했다. 05는 train 24명·validation 6명, **12,960,000행** source를 만들었다.\n\n그러나 06 최종 실행은 **24,505초(약 6시간 48분)** 후 `DeadKernelError`로 끝났다. candidate metrics·group uplift·prediction이 없으므로 **개인 기준선이나 누적 부하가 정확도를 얼마나 높였는지는 아직 알 수 없다**."
+      },
+      {
+        "id": "goal",
+        "type": "markdown",
+        "sourceId": "phase3_design",
+        "body": "## 검증하려던 가설\n\n1. G0보다 개인 과거 데이터로 보정한 기준선이 pattern_binary를 더 잘 감지하는가?\n2. 개인 전체 history보다 같은 context history가 더 안정적인가?\n3. 30분·6시간·24시간·72시간 누적 부하가 순간 변화의 빈틈을 보완하는가?\n4. 평균뿐 아니라 run·dataset·person·context·load-state별로 개선되는가?"
+      },
+      {
+        "id": "architecture",
+        "type": "markdown",
+        "sourceId": "phase3_git",
+        "body": "## 어떻게 구축했는가\n\n- `G0`: train 사람의 context별 global median/MAD\n- `P1`: 개인 과거 전체 history의 pooled baseline\n- `P2`: 개인의 같은 context history baseline\n- `P2+CL`: P2에 label-free 누적 부하 추가\n- `P2+CL-B`: 누적 부하의 기준선 영향은 global MAD의 10%로 제한\n\nwarm-up 1,800초, lookback 21,600초, 60초 refresh이며 현재 행과 미래를 제외한다. cap 0.25·0.5·1.0은 train-person grouped OOF에서만 고른다. 누적 부하는 자율신경·인지·감각·수면압력·recovery를 30분·6시간·24시간·72시간 지수감쇠 상태로 만들며 event·phase·behavior·hidden truth는 입력에서 차단한다."
+      },
+      {
+        "id": "execution",
+        "type": "markdown",
+        "sourceId": "kaggle_source",
+        "body": "## 어디까지 실행됐는가\n\n- 비공개 raw source: 약 **876MB**\n- 05 CPU notebook: 완료\n- 05 출력: 약 **556MB**, **12,960,000행**, row group 13개\n- 포함: train 24명·validation 6명; locked test 6명 sensor row 미사용\n- source SHA-256: `ea816cda9a057ecd6888bcff00110ec9189b240bb81908ce7758546243235434`\n- 06 CPU notebook: 실패\n- 06 metrics·uplift·prediction: 미생성\n\n데이터 정제와 분할 보호는 확인했지만 model selection과 validation 비교에는 도달하지 못했다."
+      },
+      {
+        "id": "progress_chart",
+        "type": "chart",
+        "chartId": "phase3_stage_progress"
+      },
+      {
+        "id": "trials_and_errors",
+        "type": "markdown",
+        "body": "## 시행착오: 네 번의 06 실행\n\n1. **첫 실행:** timezone datetime stub에 숫자 0을 채워 TypeError가 났다. dtype 보존 helper와 회귀 테스트를 추가했고, locked identity와 sensor data를 분리해야 한다는 점을 확인했다.\n2. **두 번째 실행:** Dataset version 전파 전에 이전 wheel을 읽어 helper import가 실패했다. 원격 wheel SHA readback을 추가했고, 업로드 완료와 원격 hash 확인을 실행 gate로 삼아야 한다는 점을 배웠다.\n3. **세 번째 실행:** 약 13분 후 명시적 Python 예외 없이 커널이 종료됐다. window 30초·lag 1초 reduced-memory profile로 줄였지만 feature 수만 줄여서는 반복계산이 사라지지 않았다.\n4. **네 번째 실행:** 약 6시간 48분 후 `DeadKernelError`가 발생했다. 로그에 OOM 신호가 없어 OOM이라고 단정하지 않고 추가 재실행을 중단했다. 다만 구조·자원 병목은 명확했다.\n\n최종 실행은 실패했고 부분 결과 파일도 남지 않았다."
+      },
+      {
+        "id": "bottleneck",
+        "type": "markdown",
+        "sourceId": "phase3_git",
+        "body": "## 핵심 병목\n\n1. 05의 1,296만 행 source를 06이 pandas 전체 frame으로 읽었다.\n2. P1/P2 cap 후보 6개와 최종 G0·P1·P2·P2+CL·P2+CL-B 5개에서 rolling baseline·robust-z·feature를 반복 계산했다.\n3. candidate 종료 때마다 cache·prediction을 저장하지 않고 마지막에 artifact를 쓰도록 해 6시간 계산도 회수하지 못했다.\n4. 비용은 pandas rolling·groupby·Parquet·반복 feature 생성이므로 현재 코드에 T4×2를 붙여도 근본 해결이 되지 않는다."
+      },
+      {
+        "id": "known_unknown",
+        "type": "markdown",
+        "body": "## 알 수 있는 것과 없는 것\n\n**확인:** causal 기준선·누적 부하 계약, 미래누출 방지, locked-test 미사용, group uplift API, 05 source lineage.\n\n**미확인:** G0 대비 P1/P2/P2+CL AUCPR 상승, 개인별 개선·저하 수, 최저 dataset, event F1·false alert·calibration 변화와 최종 후보.\n\n현재 adoption decision은 `DEFERRED_NO_VERIFIED_OUTPUT`이다."
+      },
+      {
+        "id": "next_architecture",
+        "type": "markdown",
+        "body": "## 다음은 체크포인트형으로 나눠야 한다\n\n1. 05A: 개인 또는 dataset별 공통 feature cache\n2. 05B: G0/P1/P2 center·MAD·n_eff를 cap과 분리해 한 번만 저장\n3. 06A: fold별 sufficient statistics로 cap·threshold 선택\n4. 06B: 후보 하나마다 prediction·metric·receipt 즉시 저장\n5. 07: hash와 sampling id가 모두 일치할 때만 uplift 집계\n\n데이터·label·split은 바꾸지 않고 계산 구조만 바꿔야 공정한 비교가 유지된다."
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "body": "## 해석 제한\n\n- 합성 latent 기반 `oracle/sanity`다.\n- 실제 웨어러블 정확도와 동기화는 `NOT VERIFIED`다.\n- locked test는 미사용이다.\n- 06 결과가 없어 정확도·AUCPR 상승을 주장할 수 없다.\n- `DeadKernelError`만으로 OOM을 확정할 수 없다.\n- 의료·행동 판단 성능을 의미하지 않는다."
+      },
+      {
+        "id": "decision",
+        "type": "markdown",
+        "body": "## 채택 판단\n\n개인 기준선과 누적 부하는 아이디어·구현 후보로 유지하되 모델로 승격하지 않는다. 체크포인트형 validation에서 G0보다 person-macro AUCPR와 event F1이 개선되고 validation 6명의 과반이 좋아지며 false alerts/hour·ECE가 5% 넘게 악화되지 않을 때만 채택한다."
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## 다음 질문\n\n1. baseline cache를 cap과 분리하면 결과를 바꾸지 않고 반복계산을 얼마나 줄이는가?\n2. 누적 부하는 독립 feature와 10% baseline 보정 중 어느 쪽이 안정적인가?\n3. 사람별 checkpoint에서 동일 sampling hash를 어떻게 강제하는가?\n4. 실제 데이터에서는 누적 스트레스와 장비 품질·결측을 어떻게 분리하는가?"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-07-31T10:00:00+09:00",
+    "status": "ready",
+    "datasets": {
+      "phase3_status": [
+        {
+          "stage": "raw source 업로드",
+          "completion": 100,
+          "status": "완료",
+          "evidence": "비공개 876MB"
+        },
+        {
+          "stage": "05 source 준비",
+          "completion": 100,
+          "status": "완료",
+          "evidence": "12,960,000행·30명"
+        },
+        {
+          "stage": "06 후보 학습",
+          "completion": 0,
+          "status": "실패",
+          "evidence": "24,505초 후 DeadKernelError"
+        },
+        {
+          "stage": "validation uplift",
+          "completion": 0,
+          "status": "미산출",
+          "evidence": "candidate output 없음"
+        },
+        {
+          "stage": "locked test",
+          "completion": 0,
+          "status": "미사용",
+          "evidence": "계약상 차단"
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "phase3_plan",
+      "label": "3차 개인·환경 기준선 검증 구현 계획",
+      "path": "docs/superpowers/plans/2026-07-30-phase3-personal-context-pattern.md"
+    },
+    {
+      "id": "phase3_design",
+      "label": "3차 개인·환경 기준선 검증 설계",
+      "path": "docs/superpowers/specs/2026-07-30-phase3-personal-context-pattern-design.md"
+    },
+    {
+      "id": "phase3_git",
+      "label": "3차 구현 브랜치",
+      "href": "https://github.com/ekhslove0131-droid/multisensor_synap/tree/codex/kaggle-ml-dl-benchmark",
+      "description": "계약, 기준선, 누적 부하, uplift, pipeline과 Kaggle notebook 구현."
+    },
+    {
+      "id": "kaggle_source",
+      "label": "Kaggle Phase 3 source notebook",
+      "href": "https://www.kaggle.com/code/bjcoding/multisensor-goal-1-5-05-phase-3-source",
+      "description": "12,960,000행의 train·validation sanitized source를 생성."
+    },
+    {
+      "id": "kaggle_pattern",
+      "label": "Kaggle Phase 3 pattern notebook",
+      "href": "https://www.kaggle.com/code/bjcoding/multisensor-goal-1-5-06-phase-3-pattern",
+      "description": "최종 실행은 24,505초 뒤 DeadKernelError; 결과 파일 없음."
+    }
+  ],
+  "package_info": {
+    "title": "3차 개인 기준선·누적 부하 패턴 검증 보고서",
+    "language": "ko",
+    "delivery": "portable_html"
+  }
+}

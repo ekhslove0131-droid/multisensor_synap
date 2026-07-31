@@ -1,0 +1,207 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "2차 시계열 머신러닝 검증 보고서",
+    "description": "평가 계약 복구, 후보 보존, causal 피처 구현과 미완료 재학습을 구분한 기술 보고서.",
+    "generatedAt": "2026-07-31T10:00:00+09:00",
+    "charts": [
+      {
+        "id": "phase2_stage_progress",
+        "title": "2차 단계별 구현·실행 상태",
+        "subtitle": "완료율은 성능 점수가 아니라 계획 항목의 구현·실행 여부다.",
+        "type": "bar",
+        "dataset": "phase2_status",
+        "source": {
+          "id": "phase2_stage_progress_source",
+          "label": "단계별 구현·실행 상태",
+          "query": {
+            "sql": "SELECT 'segment-aware 이벤트 평가' AS stage, 100 AS completion, '완료' AS status, '경계 회귀 테스트' AS evidence\nUNION ALL SELECT '후보 결과 보존', 100, '완료', 'metric·threshold·hash'\nUNION ALL SELECT 'causal 피처', 100, '완료', '미래누출·경계 reset'\nUNION ALL SELECT 'ML 재학습', 0, '미실행', '새 validation 결과 없음'\nUNION ALL SELECT 'T4×2 TCN', 0, '미실행', 'sequence 실행 없음'\nUNION ALL SELECT 'LightGBM', 0, '미실행', 'challenger 실행 없음'",
+            "description": "검토한 계획 체크박스와 실행 기록을 단계·완료율·상태·근거로 정규화했다.",
+            "tables_used": [],
+            "filters": [
+              "완료율은 모델 성능이 아닌 구현·실행 상태"
+            ],
+            "metric_definitions": {
+              "completion": "검토 시점에 완료되고 증거가 남은 단계는 100, 미실행·실패·미산출 단계는 0."
+            }
+          }
+        },
+        "layout": "wide",
+        "encodings": {
+          "x": {
+            "field": "stage",
+            "type": "nominal",
+            "label": "단계"
+          },
+          "y": {
+            "field": "completion",
+            "type": "quantitative",
+            "label": "완료율"
+          },
+          "tooltip": [
+            {
+              "field": "status",
+              "type": "text",
+              "label": "상태"
+            },
+            {
+              "field": "evidence",
+              "type": "text",
+              "label": "근거"
+            }
+          ]
+        },
+        "yAxisTitle": "%",
+        "valueFormat": "number"
+      }
+    ],
+    "sources": [
+      {
+        "id": "phase2_plan",
+        "label": "2차 시계열 ML validation 구현 계획",
+        "path": "docs/superpowers/plans/2026-07-29-phase2-time-series-ml-validation.md"
+      },
+      {
+        "id": "phase1_report",
+        "label": "1차 합성데이터·시계열 머신러닝 중간보고서",
+        "path": "reports/goal15_phase1_interim_ko.artifact.json"
+      },
+      {
+        "id": "phase2_git",
+        "label": "2차 구현 커밋",
+        "href": "https://github.com/ekhslove0131-droid/multisensor_synap/tree/codex/kaggle-ml-dl-benchmark",
+        "description": "이벤트 평가, 후보 artifact, causal feature 구현 커밋 7cb77d6, 0eee2c1, 30828e9, f9a3707."
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# 2차 시계열 머신러닝 검증 보고서\n\n**작성 기준:** 2026년 7월 31일 · **데이터 상태:** `oracle/sanity` · **실제 정확도:** `NOT VERIFIED` · **평가 범위:** validation only"
+      },
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "body": "## 2차의 결론: 새 점수보다 평가 신뢰성을 먼저 복구했다\n\n2차에서 끝낸 일은 **segment-aware 이벤트 평가, 모든 후보 결과 보존, 미래누출 없는 causal 시계열 피처 검증**이다. 수정된 전체 데이터로 Logistic Regression과 HistGradientBoosting을 다시 학습하는 Kaggle 실행, T4×2 TCN, LightGBM 비교는 완료하지 못했다.\n\n따라서 2차는 성능 상승 실험이 아니라 **다음 비교를 믿을 수 있도록 측정 기반을 고친 단계**다. 1차 HGB 수치를 2차 새 결과로 재사용하지 않으며 locked test도 열지 않았다."
+      },
+      {
+        "id": "starting_problem",
+        "type": "markdown",
+        "sourceId": "phase1_report",
+        "body": "## 출발점은 지표 모순이었다\n\n1차 패턴 validation은 AUCPR **0.494**, AUROC **0.810**, row F1 **0.050**이었다. 동시에 event recall 1.0과 false alerts/hour 0이 나와 서로 어울리지 않았다. 모델을 추가하기 전에 사건 run, person·dataset·day·session·time-gap 경계와 threshold 계산을 감사해야 했다.\n\n이 수치는 1차 결과이며 2차에서 갱신된 수치가 아니다."
+      },
+      {
+        "id": "implemented",
+        "type": "markdown",
+        "sourceId": "phase2_git",
+        "body": "## 실제로 구축한 세 가지\n\n### 1. segment-aware 이벤트 평가\n사람·물리 dataset·UTC day·session·time gap을 넘어 사건과 alert가 합쳐지지 않게 했다. 패키지와 Kaggle notebook이 같은 fixture에서 동일한 사건 수를 내도록 회귀 테스트했다.\n\n### 2. 후보별 불변 결과 보존\nchampion만 남기던 구조를 바꿔 Logistic과 HGB의 metric·threshold·runtime·support·dataset/split/feature hash를 선택 전에 Parquet과 manifest로 저장하게 했다.\n\n### 3. causal 시계열 피처\nlag 1/5/15/30/60초, rolling 5/15/30/60/180/300초, delta·slope·기준선 편차를 추가했다. 미래 값 변경이 과거를 바꾸지 않고 모든 경계에서 history가 reset되는 것을 검증했다."
+      },
+      {
+        "id": "progress_chart",
+        "type": "chart",
+        "chartId": "phase2_stage_progress"
+      },
+      {
+        "id": "not_completed",
+        "type": "markdown",
+        "sourceId": "phase2_plan",
+        "body": "## 완료하지 못한 것\n\n- 수정 feature로 Logistic/HGB validation 재학습과 후보별 실제 수치 비교\n- LightGBM challenger\n- 03 sequence 준비와 T4×2 TCN validation\n- decoder·calibration·stress의 새 후보 적용\n- validation으로 한 release를 고른 뒤 locked test 1회\n\n즉 2차에서 모델 우열을 새로 확정하거나 champion을 승격하지 않았다."
+      },
+      {
+        "id": "trials_and_errors",
+        "type": "markdown",
+        "body": "## 시행착오\n\n| 시도 | 잘되지 않은 점 | 대응과 배운 점 |\n|---|---|---|\n| event recall 중심 해석 | row F1과 false alert가 모순인데 성공처럼 보였다 | 사건 run 정의를 공통 함수로 옮기고 이전 event 수치를 채택 근거에서 제외했다 |\n| champion-only 저장 | Logistic/HGB 차이를 복원할 수 없었다 | 후보별 artifact를 선택 전에 저장했다 |\n| person만 경계로 사용 | day·session·dataset·gap을 넘어 history가 이어질 수 있었다 | 경계를 명시하고 미래변경 불변성 테스트를 추가했다 |\n| 곧바로 LightGBM·DL | 평가 계약이 흔들려 더 복잡한 점수가 무의미했다 | 후보 확장을 gate 뒤로 미뤘다 |\n| 재실행 전 3차로 이동 | 측정 기반은 좋아졌지만 2차 새 수치가 없는 채 범위가 커졌다 | 앞으로는 실행·readback·보고까지 끝낸 뒤 다음 가설로 이동해야 한다 |"
+      },
+      {
+        "id": "insight",
+        "type": "markdown",
+        "body": "## 2차에서 얻은 인사이트\n\n핵심은 단순 accuracy가 아니라 **연속 시간에서 사건을 언제 시작·유지·종료했다고 볼지**다. 공통 평가기와 후보 lineage가 먼저 고정돼야 개인화 효과도 측정할 수 있다. 2차는 성능 향상을 입증하지 않았지만 3차의 G0 대비 개인 기준선 비교 토대를 만들었다."
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "body": "## 해석 제한\n\n- 모든 데이터는 합성 latent 기반 `oracle/sanity`다.\n- 실제 Muse·Polar·Watch 성능은 `NOT VERIFIED`다.\n- 2차 새 외부 학습 결과가 없어 AUCPR 상승을 주장할 수 없다.\n- locked test는 사용하지 않았다.\n- 의료·행동 판단 성능으로 해석할 수 없다."
+      },
+      {
+        "id": "next_steps",
+        "type": "markdown",
+        "body": "## 다음 합격 기준\n\nvalidation에서 AUCPR·event F1을 1순위로 보고, false alerts/hour와 ECE가 5% 넘게 악화되거나 person-macro F1이 떨어지면 채택하지 않는다. 모델 선택 전 locked test와 실제 확인용 데이터로 threshold를 바꾸지 않는다."
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## 남은 질문\n\n1. 공통 평가기로 Logistic과 HGB의 우열이 유지되는가?\n2. 개인 기준선이 저성능 개인도 개선하는가?\n3. 누적 부하는 독립 feature와 기준선 보정 중 어디에 적합한가?\n4. 전체 1Hz 행을 반복하지 않고 같은 결과를 재현할 수 있는가?"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-07-31T10:00:00+09:00",
+    "status": "ready",
+    "datasets": {
+      "phase2_status": [
+        {
+          "stage": "이벤트 평가 계약",
+          "completion": 100,
+          "status": "완료",
+          "evidence": "7cb77d6"
+        },
+        {
+          "stage": "후보 결과 보존",
+          "completion": 100,
+          "status": "완료",
+          "evidence": "0eee2c1"
+        },
+        {
+          "stage": "causal 피처",
+          "completion": 100,
+          "status": "완료",
+          "evidence": "30828e9·f9a3707"
+        },
+        {
+          "stage": "ML 재학습",
+          "completion": 0,
+          "status": "미실행",
+          "evidence": "Task 5 미완료"
+        },
+        {
+          "stage": "T4×2 DL 비교",
+          "completion": 0,
+          "status": "미실행",
+          "evidence": "Task 5B 미완료"
+        },
+        {
+          "stage": "LightGBM 비교",
+          "completion": 0,
+          "status": "미실행",
+          "evidence": "Task 6 미완료"
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "phase2_plan",
+      "label": "2차 시계열 ML validation 구현 계획",
+      "path": "docs/superpowers/plans/2026-07-29-phase2-time-series-ml-validation.md"
+    },
+    {
+      "id": "phase1_report",
+      "label": "1차 합성데이터·시계열 머신러닝 중간보고서",
+      "path": "reports/goal15_phase1_interim_ko.artifact.json"
+    },
+    {
+      "id": "phase2_git",
+      "label": "2차 구현 커밋",
+      "href": "https://github.com/ekhslove0131-droid/multisensor_synap/tree/codex/kaggle-ml-dl-benchmark",
+      "description": "이벤트 평가, 후보 artifact, causal feature 구현 커밋 7cb77d6, 0eee2c1, 30828e9, f9a3707."
+    }
+  ],
+  "package_info": {
+    "title": "2차 시계열 머신러닝 검증 보고서",
+    "language": "ko",
+    "delivery": "portable_html"
+  }
+}
