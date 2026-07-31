@@ -84,3 +84,15 @@ def test_compare_expected_accepts_exact_contract(
 
     assert result.status == "REPRODUCED"
     assert result.compared_rows == len(actual)
+
+
+def test_compare_expected_accepts_cross_platform_probability_roundoff(
+    loaded_package, sample_frame: pd.DataFrame
+) -> None:
+    actual = predict_hierarchical(loaded_package, sample_frame)
+    expected = actual.copy()
+    expected.loc[0, "ear_covering"] += 5e-9
+
+    result = compare_expected(actual, expected)
+
+    assert result.status == "REPRODUCED"

@@ -202,7 +202,7 @@ def compare_expected(
     actual: pd.DataFrame,
     expected: pd.DataFrame,
     *,
-    probability_atol: float = 1e-12,
+    probability_atol: float = 1e-8,
 ) -> ReproductionResult:
     if list(actual.columns) != list(expected.columns) or len(actual) != len(expected):
         return ReproductionResult("FAILED", min(len(actual), len(expected)), "schema", None)

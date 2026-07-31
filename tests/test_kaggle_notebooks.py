@@ -31,6 +31,7 @@ NOTEBOOKS = [
     "05_phase3_source_prepare.ipynb",
     "06_phase3_personal_pattern.ipynb",
 ]
+ALL_NOTEBOOKS = [*NOTEBOOKS, "07_hierarchical_model_reproduction.ipynb"]
 SHARED_CONSTANTS = (
     'SERIES_ID = "mvp3-oracle-v1"',
     'EXPECTED_SPLIT_COUNTS = {"train": 24, "validation": 6, "locked_test": 6}',
@@ -330,8 +331,8 @@ def test_notebooks_have_required_structure() -> None:
         assert notebook["metadata"]["kernelspec"]["name"] == "python3", path
 
 
-def test_kaggle_directory_contains_exactly_the_six_contract_notebooks() -> None:
-    assert sorted(path.name for path in KAGGLE_DIR.glob("*.ipynb")) == NOTEBOOKS
+def test_kaggle_directory_contains_exactly_the_seven_contract_notebooks() -> None:
+    assert sorted(path.name for path in KAGGLE_DIR.glob("*.ipynb")) == ALL_NOTEBOOKS
 
 
 def test_phase3_notebook_chain_is_sequential_cpu_and_locked_test_closed() -> None:
