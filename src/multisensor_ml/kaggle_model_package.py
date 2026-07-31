@@ -6,6 +6,7 @@ import shutil
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import cast
 
 import numpy as np
@@ -240,6 +241,21 @@ def _write_deterministic_archive(source: Path, destination: Path) -> None:
                 archive.addfile(info, handle)
 
 
+def _extract_verified_archive(archive: Path, destination: Path) -> None:
+    with tarfile.open(archive, "r:gz") as bundle:
+        members = bundle.getmembers()
+        unsafe = [
+            member.name
+            for member in members
+            if member.name.startswith("/")
+            or ".." in Path(member.name).parts
+            or not (member.isfile() or member.isdir())
+        ]
+        if unsafe:
+            raise ValueError(f"unsafe archive members: {unsafe}")
+        bundle.extractall(destination, members=members, filter="data")
+
+
 def _select_sample(config: KaggleModelPackageConfig) -> tuple[pd.DataFrame, dict[str, object]]:
     prepared = config.project_root / "data/prepared" / config.series_id
     manifest = _read_json(prepared / "manifest.json")
@@ -335,21 +351,21 @@ def build_kaggle_model_package(
         destination = root / name
         _copy(document_root / name, destination)
         document_paths.append(destination)
-    checksums = root / "SHA256SUMS"
-    checksums.write_text(
-        "".join(
-            f"{sha256_file(path)}  {path.name}\n"
-            for path in (archive, manifest_path, *document_paths)
-        ),
-        encoding="utf-8",
-    )
-    (root / "model-metadata.json").write_text(
+    model_metadata = root / "model-metadata.json"
+    model_metadata.write_text(
         json.dumps(
             {
+                "ownerSlug": config.owner_slug,
                 "title": "Multisensor Goal 1.5 Hierarchical Synthetic Model",
-                "id": f"{config.owner_slug}/{config.model_slug}",
+                "slug": config.model_slug,
+                "subtitle": "개인 기준선, STD-A, 사건, 5단계, 행동 10개 합성 모델",
                 "isPrivate": True,
-                "licenses": [{"name": config.license_name}],
+                "description": (
+                    "기존 Phase 1 계층형 모델의 CPU 재현 패키지입니다. "
+                    "합성 oracle/sanity 후보이며 실제 데이터 성능은 NOT VERIFIED입니다."
+                ),
+                "publishTime": "",
+                "provenanceSources": "",
             },
             indent=2,
             sort_keys=True,
@@ -357,21 +373,47 @@ def build_kaggle_model_package(
         + "\n",
         encoding="utf-8",
     )
-    (root / "model-instance-metadata.json").write_text(
+    instance_metadata = root / "model-instance-metadata.json"
+    instance_metadata.write_text(
         json.dumps(
             {
                 "ownerSlug": config.owner_slug,
                 "modelSlug": config.model_slug,
                 "instanceSlug": config.variation_slug,
                 "framework": config.framework,
-                "isPrivate": True,
+                "overview": (
+                    "개인 기준선과 STD-A를 거쳐 사건, 5단계, 행동 10개를 "
+                    "순차 추론하는 scikit-learn 모델 모음"
+                ),
+                "usage": (
+                    "KAGGLE_REPRODUCTION_KO.md에 따라 validation 샘플의 "
+                    "expected output을 CPU에서 재현합니다. 새 학습은 수행하지 않습니다."
+                ),
                 "fineTunable": False,
                 "licenseName": config.license_name,
+                "trainingData": [],
+                "modelInstanceType": "Unspecified",
+                "baseModelInstanceId": 0,
+                "externalBaseModelUrl": "",
             },
             indent=2,
             sort_keys=True,
         )
         + "\n",
+        encoding="utf-8",
+    )
+    checksums = root / "SHA256SUMS"
+    checksums.write_text(
+        "".join(
+            f"{sha256_file(path)}  {path.name}\n"
+            for path in (
+                archive,
+                manifest_path,
+                *document_paths,
+                model_metadata,
+                instance_metadata,
+            )
+        ),
         encoding="utf-8",
     )
     package = KaggleModelPackage(root, extracted, archive, manifest_path, checksums)
@@ -395,12 +437,17 @@ def verify_kaggle_model_package(package_root: Path) -> dict[str, object]:
         checksum_expected, name = line.split("  ", maxsplit=1)
         if sha256_file(root / name) != checksum_expected:
             raise ValueError(f"outer package hash mismatch: {name}")
-    extracted = root / "extracted"
-    verify_payload(extracted)
-    sample = pd.read_parquet(extracted / "sample/sample_input.parquet")
-    expected = pd.read_parquet(extracted / "sample/expected_output.parquet")
-    actual = predict_hierarchical(load_hierarchical_package(extracted), sample)
-    result = compare_expected(actual, expected)
+    local_extracted = root / "extracted"
+    with TemporaryDirectory(prefix="multisensor-model-verify-") as temporary:
+        extracted = local_extracted
+        if not extracted.is_dir():
+            extracted = Path(temporary)
+            _extract_verified_archive(archive, extracted)
+        verify_payload(extracted)
+        sample = pd.read_parquet(extracted / "sample/sample_input.parquet")
+        expected = pd.read_parquet(extracted / "sample/expected_output.parquet")
+        actual = predict_hierarchical(load_hierarchical_package(extracted), sample)
+        result = compare_expected(actual, expected)
     if result.status != "REPRODUCED":
         raise ValueError(
             f"sample reproduction failed: {result.first_mismatch_column}"

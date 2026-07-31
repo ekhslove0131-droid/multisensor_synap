@@ -77,6 +77,8 @@ def test_kaggle_model_commands_parse() -> None:
             "config.yaml",
             "--wheel",
             "model.whl",
+            "--source-project-root",
+            "/source/project",
         ]
     )
     verify = parser.parse_args(
@@ -98,5 +100,6 @@ def test_kaggle_model_commands_parse() -> None:
     )
 
     assert package.kaggle_model_command == "package"
+    assert str(package.source_project_root) == "/source/project"
     assert verify.kaggle_model_command == "verify"
     assert reproduce.kaggle_model_command == "reproduce"

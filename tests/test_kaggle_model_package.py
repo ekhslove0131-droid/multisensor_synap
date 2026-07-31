@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,22 @@ def test_outer_verifier_rejects_archive_tamper(
         verify_kaggle_model_package(package.root)
 
 
+def test_downloaded_package_verifies_without_local_extracted_directory(
+    package_config, built_wheel: Path, tmp_path: Path
+) -> None:
+    package = build_kaggle_model_package(package_config, built_wheel)
+    downloaded = tmp_path / "downloaded"
+    downloaded.mkdir()
+    for path in package.root.iterdir():
+        if path.is_file():
+            shutil.copy2(path, downloaded / path.name)
+
+    verified = verify_kaggle_model_package(downloaded)
+
+    assert verified["reproduction_status"] == "REPRODUCED"
+    assert not (downloaded / "extracted").exists()
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -131,3 +148,22 @@ def test_built_package_attaches_all_korean_documents(
     assert expected.issubset({path.name for path in package.root.iterdir()})
     checksums = package.checksums.read_text()
     assert all(name in checksums for name in expected)
+
+
+def test_kaggle_metadata_matches_cli_2_2_4_contract(
+    package_config, built_wheel: Path
+) -> None:
+    package = build_kaggle_model_package(package_config, built_wheel)
+    model = json.loads((package.root / "model-metadata.json").read_text())
+    instance = json.loads(
+        (package.root / "model-instance-metadata.json").read_text()
+    )
+
+    assert model["ownerSlug"] == "bjcoding"
+    assert model["slug"] == "multisensor-goal15-hierarchical"
+    assert model["isPrivate"] is True
+    assert "oracle/sanity" in model["description"]
+    assert instance["framework"] == "scikitLearn"
+    assert instance["instanceSlug"] == "oracle-sanity-v1"
+    assert instance["fineTunable"] is False
+    assert instance["modelInstanceType"] == "Unspecified"

@@ -16,6 +16,7 @@ data/outcomes/
 data/model_registry/
 artifacts/
 output/
+dist/
 reports/generated/
 knime/workspace/
 knime/exports/

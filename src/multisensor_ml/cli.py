@@ -161,6 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     kaggle_package = kaggle_model_commands.add_parser("package")
     kaggle_package.add_argument("--config", type=Path, required=True)
     kaggle_package.add_argument("--wheel", type=Path, required=True)
+    kaggle_package.add_argument("--source-project-root", type=Path)
     kaggle_verify = kaggle_model_commands.add_parser("verify")
     kaggle_verify.add_argument("--package", type=Path, required=True)
     kaggle_reproduce = kaggle_model_commands.add_parser("reproduce")
@@ -195,6 +196,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "kaggle-model":
         if args.kaggle_model_command == "package":
             config = load_kaggle_model_package_config(args.config)
+            if args.source_project_root is not None:
+                config = config.model_copy(
+                    update={"project_root": args.source_project_root.resolve()}
+                )
             package = build_kaggle_model_package(config, args.wheel)
             verified = verify_kaggle_model_package(package.root)
             _emit(
