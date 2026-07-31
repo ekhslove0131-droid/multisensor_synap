@@ -64,12 +64,21 @@ fi
 
 download_and_verify() {
   local version="$1"
-  local destination="${readback_root}/v${version}"
-  mkdir -p "${destination}"
-  kaggle models variations versions download \
-    "${remote_variation_handle}/${version}" -p "${destination}" --untar -f -q >/dev/null
-  local manifest
-  manifest="$(find "${destination}" -name model_manifest.json -type f -print -quit)"
+  local destination=""
+  local manifest=""
+  for download_attempt in {1..12}; do
+    destination="${readback_root}/v${version}-${download_attempt}"
+    mkdir -p "${destination}"
+    if kaggle models variations versions download \
+      "${remote_variation_handle}/${version}" -p "${destination}" \
+      --untar -f -q >/dev/null 2>&1; then
+      manifest="$(find "${destination}" -name model_manifest.json -type f -print -quit)"
+      if [[ -n "${manifest}" ]]; then
+        break
+      fi
+    fi
+    sleep 5
+  done
   if [[ -z "${manifest}" ]]; then
     echo "remote readback is missing model_manifest.json" >&2
     exit 1
