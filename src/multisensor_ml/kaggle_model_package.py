@@ -237,6 +237,7 @@ def _write_deterministic_archive(source: Path, destination: Path) -> None:
             info.uname = ""
             info.gname = ""
             info.mtime = 0
+            info.mode = 0o644
             with path.open("rb") as handle:
                 archive.addfile(info, handle)
 
@@ -410,8 +411,6 @@ def build_kaggle_model_package(
                 archive,
                 manifest_path,
                 *document_paths,
-                model_metadata,
-                instance_metadata,
             )
         ),
         encoding="utf-8",
@@ -431,18 +430,30 @@ def verify_kaggle_model_package(package_root: Path) -> dict[str, object]:
     root = package_root.resolve()
     manifest = _read_json(root / "model_manifest.json")
     archive = root / str(manifest["archive_path"])
-    if sha256_file(archive) != manifest["archive_sha256"]:
-        raise ValueError("outer package hash mismatch: model_payload.tar.gz")
-    for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
-        checksum_expected, name = line.split("  ", maxsplit=1)
-        if sha256_file(root / name) != checksum_expected:
-            raise ValueError(f"outer package hash mismatch: {name}")
-    local_extracted = root / "extracted"
     with TemporaryDirectory(prefix="multisensor-model-verify-") as temporary:
-        extracted = local_extracted
-        if not extracted.is_dir():
+        effective_archive = archive
+        expanded = root / "model_payload"
+        if not effective_archive.is_file() and expanded.is_dir():
+            effective_archive = Path(temporary) / archive.name
+            _write_deterministic_archive(expanded, effective_archive)
+        if sha256_file(effective_archive) != manifest["archive_sha256"]:
+            raise ValueError("outer package hash mismatch: model_payload.tar.gz")
+        for line in (root / "SHA256SUMS").read_text(
+            encoding="utf-8"
+        ).splitlines():
+            checksum_expected, name = line.split("  ", maxsplit=1)
+            checked_path = root / name
+            if name == archive.name and not checked_path.is_file():
+                checked_path = effective_archive
+            if sha256_file(checked_path) != checksum_expected:
+                raise ValueError(f"outer package hash mismatch: {name}")
+
+        extracted = root / "extracted"
+        if expanded.is_dir():
+            extracted = expanded
+        elif not extracted.is_dir():
             extracted = Path(temporary)
-            _extract_verified_archive(archive, extracted)
+            _extract_verified_archive(effective_archive, extracted)
         verify_payload(extracted)
         sample = pd.read_parquet(extracted / "sample/sample_input.parquet")
         expected = pd.read_parquet(extracted / "sample/expected_output.parquet")

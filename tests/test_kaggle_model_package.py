@@ -1,5 +1,6 @@
 import json
 import shutil
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -115,6 +116,26 @@ def test_downloaded_package_verifies_without_local_extracted_directory(
 
     assert verified["reproduction_status"] == "REPRODUCED"
     assert not (downloaded / "extracted").exists()
+
+
+def test_kaggle_expanded_model_payload_reconstructs_archive_hash(
+    package_config, built_wheel: Path, tmp_path: Path
+) -> None:
+    package = build_kaggle_model_package(package_config, built_wheel)
+    downloaded = tmp_path / "kaggle-expanded"
+    downloaded.mkdir()
+    for path in package.root.iterdir():
+        if path.is_file() and path != package.archive:
+            shutil.copy2(path, downloaded / path.name)
+    payload = downloaded / "model_payload"
+    payload.mkdir()
+    with tarfile.open(package.archive, "r:gz") as bundle:
+        bundle.extractall(payload, filter="data")
+
+    verified = verify_kaggle_model_package(downloaded)
+
+    assert verified["archive_sha256"] == sha256_file(package.archive)
+    assert verified["reproduction_status"] == "REPRODUCED"
 
 
 @pytest.mark.parametrize(
