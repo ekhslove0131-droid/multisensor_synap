@@ -98,3 +98,36 @@ def test_outer_verifier_rejects_archive_tamper(
 
     with pytest.raises(ValueError, match="outer package hash mismatch"):
         verify_kaggle_model_package(package.root)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "MODEL_CARD_KO.md",
+        "KAGGLE_REPRODUCTION_KO.md",
+        "FEATURE_LABEL_GUIDE_KO.md",
+        "EXPERIMENT_LESSONS_KO.md",
+    ],
+)
+def test_korean_model_document_preserves_scope(name: str) -> None:
+    text = (Path("docs/kaggle_model") / name).read_text()
+    assert "oracle/sanity" in text
+    assert "NOT VERIFIED" in text
+    assert "합성" in text
+    assert "의료" in text
+
+
+def test_built_package_attaches_all_korean_documents(
+    package_config, built_wheel: Path
+) -> None:
+    package = build_kaggle_model_package(package_config, built_wheel)
+    expected = {
+        "MODEL_CARD_KO.md",
+        "KAGGLE_REPRODUCTION_KO.md",
+        "FEATURE_LABEL_GUIDE_KO.md",
+        "EXPERIMENT_LESSONS_KO.md",
+    }
+
+    assert expected.issubset({path.name for path in package.root.iterdir()})
+    checksums = package.checksums.read_text()
+    assert all(name in checksums for name in expected)

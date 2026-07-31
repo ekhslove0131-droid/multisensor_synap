@@ -22,6 +22,12 @@ from multisensor_ml.kaggle_model_contracts import (
 from multisensor_ml.registry import sha256_file
 
 FORBIDDEN_SUFFIXES = {".pkl", ".pickle", ".joblib"}
+KOREAN_DOCUMENTS = (
+    "MODEL_CARD_KO.md",
+    "KAGGLE_REPRODUCTION_KO.md",
+    "FEATURE_LABEL_GUIDE_KO.md",
+    "EXPERIMENT_LESSONS_KO.md",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,11 +327,19 @@ def build_kaggle_model_package(
     manifest_path.write_text(
         json.dumps(outer_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    document_root = config.project_root / "docs/kaggle_model"
+    if not document_root.is_dir():
+        document_root = Path.cwd() / "docs/kaggle_model"
+    document_paths: list[Path] = []
+    for name in KOREAN_DOCUMENTS:
+        destination = root / name
+        _copy(document_root / name, destination)
+        document_paths.append(destination)
     checksums = root / "SHA256SUMS"
     checksums.write_text(
         "".join(
             f"{sha256_file(path)}  {path.name}\n"
-            for path in (archive, manifest_path)
+            for path in (archive, manifest_path, *document_paths)
         ),
         encoding="utf-8",
     )
