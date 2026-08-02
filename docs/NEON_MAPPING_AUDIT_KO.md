@@ -1,6 +1,6 @@
 # Neon 실제 데이터 매핑 점검 보고서
 
-작성 기준: 2026-08-02 읽기 전용 스냅샷
+작성 기준: 2026-08-02 17:47 KST 읽기 전용 스냅샷
 
 ## 결론
 
@@ -11,8 +11,10 @@ Galaxy Watch 경로의 `bytea` payload가 Android `DataOutputStream` big-endian 
 반면 현재 데이터는 **실제 `model_ready` 학습 입력으로 바로 사용할 수 없다**.
 
 - payload 내부 센서 시각을 교정할 clock-sync 테이블이 운영 브랜치에 없다.
-- 초기 세션에서는 센서 시각과 `received_at`가 약 16.8시간 어긋나는 배치가 관찰됐다.
-- `analysis_status`는 스냅샷 전체가 `not_configured`이고 `stage`·`model_version`은 비어 있다.
+- 최신 스냅샷에서는 `corrected_timestamp_ms`가 0건이고, 새로 들어온 121건은
+  `insufficient_signal`로 분류되며 품질 사유가 `clock_unsynchronized`다.
+- `analysis_status`는 3,163건이 `not_configured`, 121건이 `insufficient_signal`이고,
+  `stage`·`model_version`은 모두 비어 있다.
 - 관찰자 onset/peak/recovery 라벨이 Neon에 없으므로 실제 행동·사건 정확도를 산출할 수 없다.
 - 현재 운영 브랜치에는 Watch 데이터만 있고 Muse·Polar·ECG 기준 신호는 없다.
 
@@ -21,14 +23,18 @@ Galaxy Watch 경로의 `bytea` payload가 Android `DataOutputStream` big-endian 
 
 ## 관찰된 운영 계약
 
-스냅샷 시점에는 약 1.1천 개 배치, 10개 세션, 5개 Watch 경로가 적재되어 있었다. 수집 중인
-테이블이므로 행 수는 조회 시점에 따라 변할 수 있다. 운영 테이블의 주요 컬럼은 다음과 같다.
+2026-08-02 17:47 KST 읽기 전용 조회에서는 3,284개 배치, 11개 세션, 5개 Watch 경로가
+적재되어 있었다. 상태별로 `not_configured` 3,163건, `insufficient_signal` 121건이며,
+`corrected_timestamp_ms`, `stage`, `model_version`은 모두 미지정이었다. 수집 중인 테이블이므로
+행 수는 조회 시점에 따라 변할 수 있다. 운영 테이블의 주요 컬럼은
+다음과 같다.
 
 | 영역 | 컬럼 | 의미 |
 |---|---|---|
 | 식별 | `sensor_path`, `batch_id`, `session_id`, `sequence` | 센서 경로·세션·배치 순서 |
 | 전송 | `payload`, `payload_sha256`, `received_at` | 불투명 바이너리와 수신 시각 |
-| 분석 | `analysis_status`, `stage`, `model_version`, `analyzed_at` | 아직 분석 미설정 |
+| 분석 | `analysis_status`, `stage`, `model_version`, `analyzed_at` | 미설정 또는 clock 동기화 실패 |
+| 동기화 | `source_timestamp_ms`, `corrected_timestamp_ms`, `quality`, `quality_sufficient` | 원천 시각·교정 시각·품질 사유 |
 
 경로별 관찰 계약은 다음과 같다.
 
@@ -72,8 +78,8 @@ payload 전체를 Timescale에 장기 보관하는 것이 목적이 아니다.
 ## 동기화 판정
 
 초기 세션의 일부 배치에서 `sensor_timestamp_ms - received_at`가 약 `-60,413,112 ms`였고,
-최근 배치는 약 `-12.8 s`부터 `-0.18 s` 범위였다. 이는 단순한 네트워크 지연으로 가정할 수 없는
-시계 기준 불일치다.
+최근 수집분도 품질 사유가 `clock_unsynchronized`이며 `corrected_timestamp_ms`가 채워지지
+않았다. 이는 단순한 네트워크 지연으로 가정할 수 없는 시계 기준 불일치다.
 
 권장 공통 시간축은 `corrected UTC`이며, 이후 별도 기록할 항목은 다음과 같다.
 
@@ -101,5 +107,6 @@ jitter ms, physiological lag ms, overlap seconds, correlation, status.
 
 - 디코더/매핑: `src/multisensor_ml/neon_mapping.py`
 - 매핑 테스트: `tests/test_neon_mapping.py`
-- 운영 ML·모델 상태: `analysis_status=not_configured`, 실제 accuracy `NOT VERIFIED`
+- 운영 ML·모델 상태: `not_configured`/`insufficient_signal`, `stage/model_version` 미지정,
+  실제 accuracy `NOT VERIFIED`
 - 장비 동기화: `NOT_AVAILABLE_TRUTH_ONLY`

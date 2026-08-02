@@ -21,6 +21,12 @@ from multisensor_ml.kaggle_reproduce import (
 from multisensor_ml.knime import export_knime_artifacts
 from multisensor_ml.materialize import materialize_synthetic
 from multisensor_ml.model_registry import ModelRegistry, import_oracle_bundle
+from multisensor_ml.neon_adapter import (
+    derive_watch_features,
+    fit_personal_baseline_adapter,
+    personal_adapter_manifest,
+    transform_with_personal_adapter,
+)
 from multisensor_ml.phase3_pipeline import (
     prepare_phase3_source,
     run_phase3_from_config,
@@ -188,6 +194,23 @@ def build_parser() -> argparse.ArgumentParser:
     availability_verify = availability_commands.add_parser("verify")
     availability_verify.add_argument("--package", type=Path, required=True)
 
+    neon_adapter = subparsers.add_parser("neon-adapter")
+    neon_adapter_commands = neon_adapter.add_subparsers(
+        dest="neon_adapter_command", required=True
+    )
+    neon_derive = neon_adapter_commands.add_parser("derive")
+    neon_derive.add_argument("--input", type=Path, required=True)
+    neon_derive.add_argument("--output", type=Path, required=True)
+    neon_derive.add_argument("--clock-offset-ms", type=float)
+    neon_derive.add_argument("--physiological-lag-ms", type=float)
+    neon_fit = neon_adapter_commands.add_parser("fit")
+    neon_fit.add_argument("--input", type=Path, required=True)
+    neon_fit.add_argument("--output", type=Path, required=True)
+    neon_fit.add_argument("--person-id", required=True)
+    neon_fit.add_argument("--model-version", default="hierarchical-v5")
+    neon_fit.add_argument("--warmup-seconds", type=int, default=1800)
+    neon_fit.add_argument("--weight-cap", type=float, default=0.75)
+
     phase3 = subparsers.add_parser("phase3")
     phase3_commands = phase3.add_subparsers(dest="phase3_command", required=True)
     for phase3_command in ("prepare", "train-validate", "report-input"):
@@ -302,6 +325,55 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         raise AssertionError(
             f"unhandled availability model command: {args.availability_model_command}"
+        )
+
+    if args.command == "neon-adapter":
+        if args.neon_adapter_command == "derive":
+            mapped = pd.read_parquet(args.input)
+            derived = derive_watch_features(
+                mapped,
+                clock_offset_ms=args.clock_offset_ms,
+                physiological_lag_ms=args.physiological_lag_ms,
+            )
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            derived.to_parquet(args.output, index=False)
+            _emit(
+                status="DERIVED_OBSERVED_ONLY",
+                rows=len(derived),
+                output=str(args.output.resolve()),
+                model_ready=False,
+                real_data_status="NOT VERIFIED",
+            )
+            return 0
+        if args.neon_adapter_command == "fit":
+            observed = pd.read_parquet(args.input)
+            adapter = fit_personal_baseline_adapter(
+                observed,
+                person_id=args.person_id,
+                warmup_seconds=args.warmup_seconds,
+                weight_cap=args.weight_cap,
+            )
+            transformed = transform_with_personal_adapter(observed, adapter)
+            manifest = personal_adapter_manifest(adapter, model_version=args.model_version)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            transformed_path = args.output.with_name(args.output.stem + "__transformed.parquet")
+            transformed.to_parquet(transformed_path, index=False)
+            _emit(
+                status=adapter.status,
+                manifest=str(args.output.resolve()),
+                transformed=str(transformed_path.resolve()),
+                personal_weight=adapter.personal_weight,
+                model_weights_changed=False,
+                promotable=False,
+                real_data_status="NOT VERIFIED",
+            )
+            return 0
+        raise AssertionError(
+            f"unhandled Neon adapter command: {args.neon_adapter_command}"
         )
 
     if args.command == "factory":
@@ -472,10 +544,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.phase3_command == "report-input":
-            manifest = phase3_config.artifact_root / "result" / "phase3_manifest.json"
-            if not manifest.exists():
+            phase3_manifest = phase3_config.artifact_root / "result" / "phase3_manifest.json"
+            if not phase3_manifest.exists():
                 raise FileNotFoundError("run 'phase3 train-validate' before report-input")
-            _emit(status="READY", manifest=str(manifest))
+            _emit(status="READY", manifest=str(phase3_manifest))
             return 0
         raise AssertionError(f"unhandled Phase 3 command: {args.phase3_command}")
 

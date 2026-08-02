@@ -1,0 +1,51 @@
+{
+  "schema_version": "goal1.5/neon-mapping-live-snapshot/v1",
+  "generated_at": "2026-08-02T17:47:56+09:00",
+  "language": "ko",
+  "source": {
+    "provider": "Neon Postgres",
+    "environment": "production",
+    "database": "neondb",
+    "table": "public.sensor_batches",
+    "access": "read_only"
+  },
+  "snapshot": {
+    "row_count": 3284,
+    "session_count": 11,
+    "sensor_path_count": 5,
+    "status_counts": {
+      "not_configured": 3163,
+      "insufficient_signal": 121
+    },
+    "corrected_timestamp_rows": 0,
+    "stage_rows": 0,
+    "model_version_rows": 0,
+    "first_received_at": "2026-08-02T05:10:01.323585Z",
+    "last_received_at": "2026-08-02T08:47:48.874365Z",
+    "sensor_path_counts": {
+      "/kidsignal/v1/sensor-batch": 741,
+      "/kidsignal/v1/accelerometer-batch": 708,
+      "/kidsignal/v1/ppg-batch": 1061,
+      "/kidsignal/v1/skin-temperature-batch": 17,
+      "/kidsignal/v1/eda-batch": 757
+    }
+  },
+  "mapping": {
+    "payload_contract": "DataOutputStream big-endian v1",
+    "decoder": "src/multisensor_ml/neon_mapping.py",
+    "decoded_long_table": true,
+    "corrected_utc_available": false,
+    "clock_sync_status": "NOT_AVAILABLE_TRUTH_ONLY",
+    "latest_quality_blocker": "clock_unsynchronized"
+  },
+  "model_ready": false,
+  "real_data_status": "NOT VERIFIED",
+  "adapter_status": "OBSERVED_BASELINE_ONLY",
+  "promotion_status": "BLOCKED",
+  "promotion_block_reasons": [
+    "corrected_timestamp_ms is null for the snapshot",
+    "stage and model_version are not populated",
+    "independent observer onset/peak/recovery labels are not registered",
+    "no locked real-data evaluation is permitted"
+  ]
+}
