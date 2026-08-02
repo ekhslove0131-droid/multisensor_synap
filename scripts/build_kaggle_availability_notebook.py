@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import nbformat
+from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
+
+# The notebook source is assembled as literal code-cell strings; keep the
+# generated cell lines intact so the exported notebook remains readable.
+# ruff: noqa: E501
+
+
+def build_notebook() -> nbformat.NotebookNode:
+    notebook = new_notebook()
+    notebook.metadata["kernelspec"] = {
+        "display_name": "Python 3",
+        "language": "python",
+        "name": "python3",
+    }
+    notebook.metadata["language_info"] = {"name": "python", "version": "3.12"}
+    notebook.cells = [
+        new_markdown_cell(
+            "# Goal 1.5 센서 가용성별 계층형 모델 재현\n\n"
+            "최초 합성데이터로 만든 `oracle/sanity` 모델을 학습 없이 읽고, "
+            "Watch·Polar·Muse 1/2/3종 조합 일곱 프로파일의 사건·5단계 prediction을 재현합니다.\n\n"
+            "실제 Neon 정확도와 장비 동기화는 `NOT VERIFIED`입니다."
+        ),
+        new_code_cell(
+            "from pathlib import Path\n"
+            "import hashlib\n"
+            "import json\n"
+            "import os\n"
+            "import shutil\n"
+            "import subprocess\n"
+            "import sys\n"
+            "import tarfile\n"
+            "\n"
+            "RUN_TRAINING = False\n"
+            "RUN_LOCKED_TEST = False\n"
+            "USE_GPU = False\n"
+            "assert not RUN_TRAINING and not RUN_LOCKED_TEST and not USE_GPU\n"
+            "print({'RUN_TRAINING': RUN_TRAINING, 'RUN_LOCKED_TEST': RUN_LOCKED_TEST, 'USE_GPU': USE_GPU})"
+        ),
+        new_code_cell(
+            "def sha256_file(path: Path) -> str:\n"
+            "    digest = hashlib.sha256()\n"
+            "    with path.open('rb') as handle:\n"
+            "        for chunk in iter(lambda: handle.read(1024 * 1024), b''):\n"
+            "            digest.update(chunk)\n"
+            "    return digest.hexdigest()\n\n"
+            "manifests = sorted(Path('/kaggle/input').rglob('model_manifest.json'))\n"
+            "if len(manifests) != 1:\n"
+            "    raise RuntimeError(f'모델 manifest는 하나여야 합니다: {manifests}')\n"
+            "model_input = manifests[0].parent\n"
+            "model_root = Path('/kaggle/working/availability_model')\n"
+            "if model_root.exists():\n"
+            "    shutil.rmtree(model_root)\n"
+            "model_root.mkdir(parents=True)\n"
+            "shutil.copy2(model_input / 'model_manifest.json', model_root / 'model_manifest.json')\n"
+            "outer = json.loads((model_root / 'model_manifest.json').read_text())\n"
+            "archive = model_input / outer['archive_path']\n"
+            "payload = model_root / 'extracted'\n"
+            "payload.mkdir()\n"
+            "if archive.is_file():\n"
+            "    if sha256_file(archive) != outer['archive_sha256']:\n"
+            "        raise RuntimeError('모델 archive SHA-256 불일치')\n"
+            "    with tarfile.open(archive, 'r:gz') as bundle:\n"
+            "        unsafe = any(member.name.startswith('/') or '..' in Path(member.name).parts for member in bundle.getmembers())\n"
+            "        if unsafe:\n"
+            "            raise RuntimeError('안전하지 않은 archive member')\n"
+            "        bundle.extractall(payload, filter='data')\n"
+            "else:\n"
+            "    expanded = model_input / 'model_payload'\n"
+            "    if not expanded.is_dir():\n"
+            "        raise RuntimeError('Kaggle model archive 또는 확장 payload가 없습니다')\n"
+            "    shutil.copytree(expanded, payload, dirs_exist_ok=True)\n"
+            "    checksums = model_input / 'SHA256SUMS'\n"
+            "    if checksums.is_file() and outer['archive_sha256'] not in checksums.read_text():\n"
+            "        raise RuntimeError('Kaggle readback checksum manifest 불일치')\n"
+            "wheelhouse = sorted((payload / 'wheel').glob('*.whl'))\n"
+            "runtime = Path('/kaggle/working/multisensor_runtime')\n"
+            "runtime.mkdir(exist_ok=True)\n"
+            "subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--target', str(runtime), '--no-index', '--no-deps', *map(str, wheelhouse)])\n"
+            "sys.path.insert(0, str(runtime))\n"
+            "print({'model_root': str(model_root), 'profiles': outer['profile_ids'], 'archive_sha256': outer['archive_sha256']})"
+        ),
+        new_code_cell(
+            "import pandas as pd\n"
+            "from multisensor_ml.sensor_availability import (\n"
+            "    AVAILABILITY_PROFILES,\n"
+            "    load_availability_variant,\n"
+            "    predict_availability_variant,\n"
+            "    verify_sensor_availability_package,\n"
+            ")\n\n"
+            "if archive.is_file():\n"
+            "    verified = verify_sensor_availability_package(model_root)\n"
+            "else:\n"
+            "    payload_manifest = json.loads((payload / 'payload_manifest.json').read_text())\n"
+            "    for relative, expected_hash in payload_manifest['files'].items():\n"
+            "        if sha256_file(payload / relative) != expected_hash:\n"
+            "            raise RuntimeError(f'payload hash 불일치: {relative}')\n"
+            "    verified = outer\n"
+            "results = []\n"
+            "for profile_id in AVAILABILITY_PROFILES:\n"
+            "    profile_root = payload / 'profiles' / profile_id\n"
+            "    package = load_availability_variant(profile_root)\n"
+            "    sample = pd.read_parquet(payload / 'sample' / f'{profile_id}__input.parquet')\n"
+            "    expected = pd.read_parquet(payload / 'sample' / f'{profile_id}__expected.parquet')\n"
+            "    actual = predict_availability_variant(package, sample)\n"
+            "    pd.testing.assert_frame_equal(actual, expected, check_exact=False, rtol=1e-6, atol=1e-6)\n"
+            "    results.append({'profile_id': profile_id, 'rows': len(actual), 'status': 'REPRODUCED'})\n"
+            "results"
+        ),
+        new_code_cell(
+            "receipt = {\n"
+            "    'status': 'REPRODUCED',\n"
+            "    'profiles': results,\n"
+            "    'model_package_sha256': outer['archive_sha256'],\n"
+            "    'locked_test_read': False,\n"
+            "    'run_training': RUN_TRAINING,\n"
+            "    'run_locked_test': RUN_LOCKED_TEST,\n"
+            "    'data_status': 'oracle/sanity',\n"
+            "    'real_data_status': 'NOT VERIFIED',\n"
+            "    'device_synchronization_status': 'NOT_AVAILABLE_TRUTH_ONLY',\n"
+            "}\n"
+            "receipt_path = Path('/kaggle/working/availability_reproduction_receipt.json')\n"
+            "receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\\n')\n"
+            "print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))"
+        ),
+        new_markdown_cell(
+            "## 해석 경계\n\n"
+            "프로파일 비교는 센서 가용성에 따른 feature-ablation sanity check입니다. "
+            "Neon의 실제 Watch 데이터는 payload 디코드·clock correction·품질 파생·관찰자 라벨이 "
+            "완료된 뒤에만 별도 adapter로 평가합니다."
+        ),
+    ]
+    nbformat.validate(notebook)
+    return notebook
+
+
+def main() -> None:
+    destination = Path("kaggle/08_sensor_availability_reproduction.ipynb")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    nbformat.write(build_notebook(), destination)
+
+
+if __name__ == "__main__":
+    main()

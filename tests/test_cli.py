@@ -14,6 +14,7 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
         "export-knime",
         "factory",
         "kaggle-model",
+        "availability-model",
             "materialize-synthetic",
             "phase3",
             "prepare",
@@ -103,3 +104,33 @@ def test_kaggle_model_commands_parse() -> None:
     assert str(package.source_project_root) == "/source/project"
     assert verify.kaggle_model_command == "verify"
     assert reproduce.kaggle_model_command == "reproduce"
+
+
+def test_availability_model_commands_parse() -> None:
+    parser = build_parser()
+    package = parser.parse_args(
+        [
+            "availability-model",
+            "package",
+            "--project-root",
+            "/project",
+            "--series",
+            "mvp3-oracle-v1",
+            "--output",
+            "/tmp/package",
+            "--wheel",
+            "/tmp/multisensor_ml.whl",
+            "--max-rows-per-person",
+            "1000",
+        ]
+    )
+    verify = parser.parse_args(
+        ["availability-model", "verify", "--package", "/tmp/package"]
+    )
+
+    assert package.availability_model_command == "package"
+    assert str(package.project_root) == "/project"
+    assert package.series == "mvp3-oracle-v1"
+    assert str(package.wheel) == "/tmp/multisensor_ml.whl"
+    assert package.max_rows_per_person == 1000
+    assert verify.availability_model_command == "verify"

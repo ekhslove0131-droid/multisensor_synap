@@ -37,6 +37,11 @@ from multisensor_ml.registry_workflow import (
     run_registry_all,
     run_registry_stage,
 )
+from multisensor_ml.sensor_availability import (
+    AVAILABILITY_PROFILES,
+    build_sensor_availability_package,
+    verify_sensor_availability_package,
+)
 from multisensor_ml.settings import (
     load_factory_config,
     load_goal15_config,
@@ -170,6 +175,19 @@ def build_parser() -> argparse.ArgumentParser:
     kaggle_reproduce.add_argument("--output", type=Path, required=True)
     kaggle_reproduce.add_argument("--expected", type=Path)
 
+    availability_model = subparsers.add_parser("availability-model")
+    availability_commands = availability_model.add_subparsers(
+        dest="availability_model_command", required=True
+    )
+    availability_package = availability_commands.add_parser("package")
+    availability_package.add_argument("--project-root", type=Path, default=Path.cwd())
+    availability_package.add_argument("--series", required=True)
+    availability_package.add_argument("--output", type=Path, required=True)
+    availability_package.add_argument("--wheel", type=Path)
+    availability_package.add_argument("--max-rows-per-person", type=int, default=20_000)
+    availability_verify = availability_commands.add_parser("verify")
+    availability_verify.add_argument("--package", type=Path, required=True)
+
     phase3 = subparsers.add_parser("phase3")
     phase3_commands = phase3.add_subparsers(dest="phase3_command", required=True)
     for phase3_command in ("prepare", "train-validate", "report-input"):
@@ -249,6 +267,41 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if comparison.status == "REPRODUCED" else 1
         raise AssertionError(
             f"unhandled Kaggle model command: {args.kaggle_model_command}"
+        )
+
+    if args.command == "availability-model":
+        if args.availability_model_command == "package":
+            package_root = build_sensor_availability_package(
+                args.project_root.resolve(),
+                series_id=args.series,
+                output_root=args.output,
+                max_rows_per_person=args.max_rows_per_person,
+                wheel_path=args.wheel,
+            )
+            verified = verify_sensor_availability_package(package_root)
+            _emit(
+                status="PACKAGED",
+                package_root=str(package_root),
+                archive_sha256=verified["archive_sha256"],
+                profiles=list(AVAILABILITY_PROFILES),
+                locked_test_read=False,
+                data_status="oracle/sanity",
+                real_data_status="NOT VERIFIED",
+            )
+            return 0
+        if args.availability_model_command == "verify":
+            verified = verify_sensor_availability_package(args.package.resolve())
+            _emit(
+                status="VERIFIED",
+                archive_sha256=verified["archive_sha256"],
+                profiles=verified["profile_ids"],
+                locked_test_read=False,
+                data_status="oracle/sanity",
+                real_data_status="NOT VERIFIED",
+            )
+            return 0
+        raise AssertionError(
+            f"unhandled availability model command: {args.availability_model_command}"
         )
 
     if args.command == "factory":

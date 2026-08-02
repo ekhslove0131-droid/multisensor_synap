@@ -1,0 +1,14 @@
+{
+  "id": "bjcoding/goal15-availability-reproduction",
+  "title": "Goal15 Availability Reproduction",
+  "code_file": "08_sensor_availability_reproduction.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "dataset_sources": [],
+  "model_sources": [
+    "bjcoding/multisensor-goal15-availability/ScikitLearn/oracle-sanity-v1/3"
+  ]
+}
