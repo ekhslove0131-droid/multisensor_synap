@@ -1,0 +1,13 @@
+{
+  "id": "bjcoding/multisensor-goal15-tree-benchmark",
+  "title": "Multisensor Goal15 XGBoost LightGBM Benchmark",
+  "code_file": "09_tree_model_benchmark.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "dataset_sources": [
+    "bjcoding/multisensor-goal15-oracle-mvp3"
+  ]
+}

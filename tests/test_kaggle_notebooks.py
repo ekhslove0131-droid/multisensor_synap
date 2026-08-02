@@ -35,6 +35,7 @@ ALL_NOTEBOOKS = [
     *NOTEBOOKS,
     "07_hierarchical_model_reproduction.ipynb",
     "08_sensor_availability_reproduction.ipynb",
+    "09_tree_model_benchmark.ipynb",
 ]
 SHARED_CONSTANTS = (
     'SERIES_ID = "mvp3-oracle-v1"',
@@ -335,7 +336,7 @@ def test_notebooks_have_required_structure() -> None:
         assert notebook["metadata"]["kernelspec"]["name"] == "python3", path
 
 
-def test_kaggle_directory_contains_exactly_the_eight_contract_notebooks() -> None:
+def test_kaggle_directory_contains_exactly_the_nine_contract_notebooks() -> None:
     assert sorted(path.name for path in KAGGLE_DIR.glob("*.ipynb")) == ALL_NOTEBOOKS
 
 

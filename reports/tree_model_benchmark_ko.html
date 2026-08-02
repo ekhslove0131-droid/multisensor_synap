@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>트리 모델 비교</title>
+<style>body{font-family:NanumGothic,'Apple SD Gothic Neo',sans-serif;margin:2rem;color:#172033}
+img{max-width:100%;height:auto;border:1px solid #e5e7eb;margin:1rem 0}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{border:1px solid #d9dee8;padding:.45rem;text-align:right}
+th:first-child,td:first-child{text-align:left}
+.notice{background:#fff5e6;padding:1rem;border-left:4px solid #e15759}
+</style></head><body>
+<h1>XGBoost·LightGBM·앙상블 비교</h1>
+<div class="notice">합성 <b>oracle/sanity</b> bounded validation 결과입니다.
+실제 정확도는 <b>NOT VERIFIED</b>이며 locked test는 읽지 않았습니다.</div>
+<p>도전자 앵커: <b>lightgbm</b>
+· 운영 기준 모델: <b>existing_hist_gradient_boosting</b>
+· 승격 상태: <b>승격 보류(평가 범위·임계값 불일치)</b>
+· 폰트: <b>NanumGothic</b> · 실행 시각: 2026-08-02T21:22:50+09:00</p>
+<img src="tree_model_benchmark_ko_metrics.png" alt="모델 지표 비교 그래프">
+<img src="tree_model_benchmark_ko_importance.png" alt="피처 중요도 그래프">
+<img src="tree_model_benchmark_ko_stability.png" alt="성능과 중요도 안정성 그래프">
+<table><thead><tr><th>모델</th><th>AUCPR</th><th>사건 F1</th>
+<th>시간당 오탐</th><th>Brier</th><th>ECE</th><th>평가 범위</th><th>앵커</th></tr></thead>
+<tbody><tr><td>기존 Logistic</td><td>0.24672272552005048</td><td>0.6634615384615384</td><td>0.09722222222222222</td><td>0.17462006968535265</td><td>0.36512159763983054</td><td>existing_full_validation</td><td>nan</td></tr><tr><td>기존 HGB</td><td>0.511066967178253</td><td>0.7413793103448276</td><td>0.005555555555555556</td><td>0.06428751338937501</td><td>0.183715706265556</td><td>existing_full_validation</td><td>nan</td></tr><tr><td>XGBoost</td><td>0.6527114072825485</td><td>0.5856152512998267</td><td>13.888260853796774</td><td>0.11424789035622725</td><td>0.10988214081227704</td><td>bounded_validation_sample</td><td>lightgbm</td></tr><tr><td>LightGBM</td><td>0.6591881103567877</td><td>0.5967707304504659</td><td>13.979932542600714</td><td>0.10965407240789471</td><td>0.09297316458478631</td><td>bounded_validation_sample</td><td>lightgbm</td></tr><tr><td>소프트 앙상블</td><td>0.658314881804665</td><td>0.5946810810810811</td><td>13.482683079088439</td><td>0.11122181047936562</td><td>0.1013591817390833</td><td>bounded_validation_sample</td><td>lightgbm</td></tr></tbody></table>
+<p>ExtraTrees는 요청대로 이번 비교에서 제외하고 마지막 후보로 남겼습니다.
+도전자와 기존 HGB는 평가 범위·임계값이 달라 자동 승격하지 않았습니다.</p>
+</body></html>

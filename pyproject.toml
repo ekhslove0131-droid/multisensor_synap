@@ -22,6 +22,13 @@ dependencies = [
 [project.scripts]
 multisensor-ml = "multisensor_ml.cli:main"
 
+[project.optional-dependencies]
+tree-benchmark = [
+    "lightgbm>=4.5,<5",
+    "matplotlib>=3.9,<4",
+    "xgboost>=2.1,<4",
+]
+
 [dependency-groups]
 dev = [
   "hypothesis>=6.130,<7",
