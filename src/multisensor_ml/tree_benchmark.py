@@ -32,6 +32,22 @@ TREE_MODEL_LABELS_KO: Final[dict[str, str]] = {
     "soft_ensemble": "소프트 앙상블",
 }
 
+DERIVED_SIGNAL_BASES: Final[tuple[str, ...]] = (
+    "autonomic_arousal",
+    "motor_activation",
+    "cognitive_load",
+    "sleep_pressure",
+    "sensory_context",
+    "recovery_capacity",
+    "social_context",
+)
+FEATURE_GROUP_LABELS_KO: Final[dict[str, str]] = {
+    "derived_signal": "생리·상황 파생변수",
+    "time": "시간 주기",
+    "context": "맥락·각성",
+    "other": "기타·품질",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class TreeBenchmarkConfig:
@@ -48,6 +64,11 @@ class TreeBenchmarkConfig:
     colsample_bytree: float = 0.8
     n_jobs: int = 1
     threshold: float = 0.5
+    time_ablation_aucpr_relative_drop_limit: float = 0.05
+    time_ablation_event_recall_absolute_drop_limit: float = 0.05
+    min_positive_person_fraction: float = 0.80
+    min_repeat_positive_rate: float = 0.67
+    permutation_repeats: int = 3
 
 
 DEFAULT_TREE_BENCHMARK_CONFIG: Final[TreeBenchmarkConfig] = TreeBenchmarkConfig()
@@ -60,6 +81,36 @@ class TreeBenchmarkResult:
     feature_importance: pd.DataFrame
     importance_summary: pd.DataFrame
     anchor_model: str
+    fitted_models: dict[str, tuple[TreeProbabilityModel, ...]] | None = None
+
+
+def feature_group_map(feature_names: Sequence[str]) -> dict[str, tuple[str, ...]]:
+    """Assign model inputs to auditable semantic groups.
+
+    All seven latent-derived factor families are grouped together so the gate
+    tests the intended derived-signal layer rather than a single correlated
+    window.  Calendar features are kept separate to expose schedule shortcuts.
+    """
+
+    groups: dict[str, list[str]] = {
+        "derived_signal": [],
+        "time": [],
+        "context": [],
+        "other": [],
+    }
+    for feature in feature_names:
+        name = str(feature)
+        base = name.split("__", 1)[0]
+        if base in DERIVED_SIGNAL_BASES:
+            group_id = "derived_signal"
+        elif name.startswith("time_") or name.startswith("weekday_"):
+            group_id = "time"
+        elif name.startswith("context__") or name == "is_awake":
+            group_id = "context"
+        else:
+            group_id = "other"
+        groups[group_id].append(name)
+    return {group_id: tuple(values) for group_id, values in groups.items() if values}
 
 
 def feature_importance_table(
@@ -134,6 +185,179 @@ def summarize_feature_importance(table: pd.DataFrame) -> pd.DataFrame:
     if not rows:
         raise ValueError("feature importance table is empty")
     return pd.DataFrame(rows)
+
+
+PERMUTATION_COLUMNS: Final[tuple[str, ...]] = (
+    "model_id",
+    "seed_index",
+    "person_key",
+    "group_id",
+    "repeat",
+    "baseline_aucpr",
+    "permuted_aucpr",
+    "importance_drop",
+    "valid_person",
+)
+
+
+def permutation_importance_by_person(
+    models: Mapping[str, Sequence[TreeProbabilityModel]],
+    validation_features: pd.DataFrame,
+    validation_target: Sequence[int] | np.ndarray,
+    validation_groups: Sequence[object],
+    feature_groups: Mapping[str, Sequence[str]],
+    *,
+    repeats: int = 3,
+    random_state: int = 20260725,
+) -> pd.DataFrame:
+    """Measure grouped permutation AUCPR drop within each validation person.
+
+    Permutations stay inside a person so the audit does not turn a person
+    split into a cross-person distribution shift.  Each group is permuted as
+    a block, preserving correlations among its windows.  A positive drop
+    means the model relied on that group for that person's ranking.
+    """
+
+    from sklearn.metrics import average_precision_score
+
+    if repeats < 1:
+        raise ValueError("repeats must be positive")
+    target = np.asarray(validation_target, dtype="int8")
+    if len(target) != len(validation_features) or len(validation_groups) != len(target):
+        raise ValueError("validation features, target, and groups must align")
+    feature_names = list(validation_features.columns)
+    positions_by_person: dict[object, list[int]] = {}
+    for position, person in enumerate(validation_groups):
+        positions_by_person.setdefault(person, []).append(position)
+    position_arrays = {
+        person: np.asarray(positions, dtype="int64")
+        for person, positions in positions_by_person.items()
+    }
+    rows: list[dict[str, object]] = []
+    for model_id, seed_models in models.items():
+        for seed_index, model in enumerate(seed_models):
+            for person_key, positions in position_arrays.items():
+                person_target = target[positions]
+                valid_person = np.unique(person_target).size > 1
+                if not valid_person:
+                    continue
+                person_features = validation_features.iloc[positions]
+                baseline_probability = np.asarray(
+                    model.predict_proba(person_features), dtype="float64"
+                )[:, 1]
+                baseline_aucpr = float(
+                    average_precision_score(person_target, baseline_probability)
+                )
+                for group_index, (group_id, columns) in enumerate(feature_groups.items()):
+                    selected_columns = [name for name in columns if name in feature_names]
+                    if not selected_columns:
+                        continue
+                    column_positions = [feature_names.index(name) for name in selected_columns]
+                    original = person_features.to_numpy(dtype="float64", copy=True)
+                    for repeat in range(repeats):
+                        permutation_seed = (
+                            random_state
+                            + seed_index * 100_000
+                            + group_index * 1_000
+                            + repeat
+                        )
+                        permutation = np.random.default_rng(permutation_seed).permutation(
+                            len(positions)
+                        )
+                        permuted = original.copy()
+                        permuted[:, column_positions] = original[
+                            permutation[:, None], column_positions
+                        ]
+                        permuted_probability = np.asarray(
+                            model.predict_proba(
+                                pd.DataFrame(permuted, columns=feature_names)
+                            ),
+                            dtype="float64",
+                        )[:, 1]
+                        permuted_aucpr = float(
+                            average_precision_score(person_target, permuted_probability)
+                        )
+                        rows.append(
+                            {
+                                "model_id": str(model_id),
+                                "seed_index": int(seed_index),
+                                "person_key": str(person_key),
+                                "group_id": str(group_id),
+                                "repeat": int(repeat),
+                                "baseline_aucpr": baseline_aucpr,
+                                "permuted_aucpr": permuted_aucpr,
+                                "importance_drop": baseline_aucpr - permuted_aucpr,
+                                "valid_person": True,
+                            }
+                        )
+    return pd.DataFrame(rows, columns=PERMUTATION_COLUMNS)
+
+
+def summarize_permutation_importance(
+    detail: pd.DataFrame,
+    *,
+    min_positive_person_fraction: float = 0.80,
+    min_repeat_positive_rate: float = 0.67,
+) -> pd.DataFrame:
+    """Summarize repeated positive group contribution by model and group."""
+
+    if not 0.0 <= min_positive_person_fraction <= 1.0:
+        raise ValueError("min_positive_person_fraction must be in [0, 1]")
+    if not 0.0 <= min_repeat_positive_rate <= 1.0:
+        raise ValueError("min_repeat_positive_rate must be in [0, 1]")
+    required = {
+        "model_id",
+        "group_id",
+        "person_key",
+        "importance_drop",
+        "valid_person",
+    }
+    missing = sorted(required.difference(detail.columns))
+    if missing:
+        raise ValueError(f"permutation detail missing columns: {missing}")
+    valid = detail.loc[detail["valid_person"].astype(bool)].copy()
+    if valid.empty:
+        return pd.DataFrame(
+            columns=[
+                "model_id",
+                "group_id",
+                "mean_importance_drop",
+                "median_importance_drop",
+                "positive_person_fraction",
+                "mean_person_repeat_positive_rate",
+                "valid_person_count",
+                "repeated_positive",
+            ]
+        )
+    person = (
+        valid.groupby(["model_id", "group_id", "person_key"], sort=True)["importance_drop"]
+        .agg(
+            person_mean_importance_drop="mean",
+            person_median_importance_drop="median",
+            person_repeat_positive_rate=lambda values: float((values > 0.0).mean()),
+        )
+        .reset_index()
+    )
+    person["person_repeated_positive"] = person["person_repeat_positive_rate"].ge(
+        min_repeat_positive_rate
+    )
+    summary = (
+        person.groupby(["model_id", "group_id"], sort=True)
+        .agg(
+            mean_importance_drop=("person_mean_importance_drop", "mean"),
+            median_importance_drop=("person_median_importance_drop", "median"),
+            positive_person_fraction=("person_repeated_positive", "mean"),
+            mean_person_repeat_positive_rate=("person_repeat_positive_rate", "mean"),
+            valid_person_count=("person_key", "nunique"),
+        )
+        .reset_index()
+    )
+    summary["repeated_positive"] = (
+        summary["mean_importance_drop"].gt(0.0)
+        & summary["positive_person_fraction"].ge(min_positive_person_fraction)
+        & summary["mean_person_repeat_positive_rate"].ge(min_repeat_positive_rate)
+    )
+    return summary
 
 
 def weighted_soft_average(
@@ -219,6 +443,150 @@ def select_anchor_model(
         kind="mergesort",
     )
     return str(eligible.iloc[0]["model_id"])
+
+
+def evaluate_anchor_gate(
+    full_metrics: pd.DataFrame,
+    time_ablation_metrics: pd.DataFrame,
+    permutation_summary: pd.DataFrame,
+    *,
+    aucpr_relative_drop_limit: float = 0.05,
+    event_recall_absolute_drop_limit: float = 0.05,
+    derived_group_id: str = "derived_signal",
+    min_positive_person_fraction: float = 0.80,
+    min_repeat_positive_rate: float = 0.67,
+) -> pd.DataFrame:
+    """Apply the predeclared anchor requirements to each tree challenger."""
+
+    if not 0.0 <= aucpr_relative_drop_limit < 1.0:
+        raise ValueError("aucpr_relative_drop_limit must be in [0, 1)")
+    if event_recall_absolute_drop_limit < 0.0:
+        raise ValueError("event_recall_absolute_drop_limit must be non-negative")
+    required_metrics = {"model_id", "aucpr", "event_recall"}
+    missing_full = sorted(required_metrics.difference(full_metrics.columns))
+    missing_ablation = sorted(required_metrics.difference(time_ablation_metrics.columns))
+    required_permutation = {
+        "model_id",
+        "group_id",
+        "mean_importance_drop",
+        "positive_person_fraction",
+        "mean_person_repeat_positive_rate",
+    }
+    missing_permutation = sorted(required_permutation.difference(permutation_summary.columns))
+    if missing_full or missing_ablation or missing_permutation:
+        raise ValueError(
+            "anchor gate inputs missing "
+            f"full={missing_full}, ablation={missing_ablation}, "
+            f"permutation={missing_permutation}"
+        )
+    candidate_ids = sorted(
+        set(full_metrics["model_id"].astype(str))
+        .intersection(time_ablation_metrics["model_id"].astype(str))
+    )
+    rows: list[dict[str, object]] = []
+    for model_id in candidate_ids:
+        full_match = full_metrics.loc[full_metrics["model_id"].eq(model_id)]
+        ablation_match = time_ablation_metrics.loc[
+            time_ablation_metrics["model_id"].eq(model_id)
+        ]
+        permutation_match = permutation_summary.loc[
+            permutation_summary["model_id"].eq(model_id)
+            & permutation_summary["group_id"].eq(derived_group_id)
+        ]
+        reasons: list[str] = []
+        if full_match.empty or ablation_match.empty:
+            rows.append(
+                {
+                    "model_id": model_id,
+                    "gate_pass": False,
+                    "gate_reason": "missing_full_or_time_ablation_metrics",
+                }
+            )
+            continue
+        full_row = full_match.iloc[0]
+        ablation_row = ablation_match.iloc[0]
+        full_aucpr = float(full_row["aucpr"])
+        ablation_aucpr = float(ablation_row["aucpr"])
+        full_recall = float(full_row["event_recall"])
+        ablation_recall = float(ablation_row["event_recall"])
+        if np.isfinite(full_aucpr) and np.isfinite(ablation_aucpr):
+            aucpr_relative_drop = max(
+                0.0,
+                (full_aucpr - ablation_aucpr) / max(abs(full_aucpr), 1e-12),
+            )
+            aucpr_pass = aucpr_relative_drop <= aucpr_relative_drop_limit
+        else:
+            aucpr_relative_drop = float("nan")
+            aucpr_pass = False
+        if np.isfinite(full_recall) and np.isfinite(ablation_recall):
+            event_recall_drop = max(0.0, full_recall - ablation_recall)
+            event_recall_pass = event_recall_drop <= event_recall_absolute_drop_limit
+        else:
+            event_recall_drop = float("nan")
+            event_recall_pass = False
+        if permutation_match.empty:
+            mean_importance_drop = float("nan")
+            positive_person_fraction = 0.0
+            mean_repeat_positive_rate = 0.0
+            derived_pass = False
+        else:
+            permutation_row = permutation_match.iloc[0]
+            mean_importance_drop = float(permutation_row["mean_importance_drop"])
+            positive_person_fraction = float(permutation_row["positive_person_fraction"])
+            mean_repeat_positive_rate = float(
+                permutation_row["mean_person_repeat_positive_rate"]
+            )
+            derived_pass = (
+                mean_importance_drop > 0.0
+                and positive_person_fraction >= min_positive_person_fraction
+                and mean_repeat_positive_rate >= min_repeat_positive_rate
+            )
+        if not aucpr_pass:
+            reasons.append("time_ablation_aucpr_drop_exceeded")
+        if not event_recall_pass:
+            reasons.append("time_ablation_event_recall_drop_exceeded")
+        if not derived_pass:
+            reasons.append("derived_group_permutation_not_repeated_positive")
+        rows.append(
+            {
+                "model_id": model_id,
+                "full_aucpr": full_aucpr,
+                "time_ablation_aucpr": ablation_aucpr,
+                "aucpr_relative_drop": aucpr_relative_drop,
+                "full_event_recall": full_recall,
+                "time_ablation_event_recall": ablation_recall,
+                "event_recall_drop": event_recall_drop,
+                "time_ablation_aucpr_pass": bool(aucpr_pass),
+                "time_ablation_event_recall_pass": bool(event_recall_pass),
+                "derived_mean_importance_drop": mean_importance_drop,
+                "derived_positive_person_fraction": positive_person_fraction,
+                "derived_mean_repeat_positive_rate": mean_repeat_positive_rate,
+                "derived_permutation_pass": bool(derived_pass),
+                "gate_pass": bool(aucpr_pass and event_recall_pass and derived_pass),
+                "gate_reason": "PASS" if not reasons else ";".join(reasons),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def select_gated_anchor_model(
+    metrics: pd.DataFrame,
+    stability: pd.DataFrame,
+    gate: pd.DataFrame,
+    *,
+    aucpr_guardrail: float = 0.02,
+) -> str | None:
+    """Select a stable candidate only after the full audit gate passes."""
+
+    required = {"model_id", "gate_pass"}
+    missing = sorted(required.difference(gate.columns))
+    if missing:
+        raise ValueError(f"anchor gate missing columns: {missing}")
+    approved = gate.loc[gate["gate_pass"].astype(bool), "model_id"].astype(str)
+    eligible = metrics.loc[metrics["model_id"].astype(str).isin(set(approved))].copy()
+    if eligible.empty:
+        return None
+    return select_anchor_model(eligible, stability, aucpr_guardrail=aucpr_guardrail)
 
 
 def build_tree_candidates(
@@ -427,12 +795,16 @@ def fit_tree_challengers(
     probability_by_model: dict[str, list[np.ndarray]] = {
         model_id: [] for model_id in TREE_MODEL_IDS
     }
+    fitted_models: dict[str, list[TreeProbabilityModel]] = {
+        model_id: [] for model_id in TREE_MODEL_IDS
+    }
     importance_parts: list[pd.DataFrame] = []
     for seed_offset in range(config.seed_count):
         seed = config.random_state + seed_offset
         candidates = build_tree_candidates(config, seed=seed)
         for model_id, model in candidates.items():
             model.fit(train_features, y_train)
+            fitted_models[model_id].append(model)
             probabilities = np.asarray(
                 model.predict_proba(validation_features), dtype="float64"
             )[:, 1]
@@ -519,4 +891,7 @@ def fit_tree_challengers(
         feature_importance=importance,
         importance_summary=summary,
         anchor_model=anchor_model,
+        fitted_models={
+            model_id: tuple(models) for model_id, models in fitted_models.items()
+        },
     )

@@ -84,6 +84,13 @@ NOTEBOOK_SOURCE = dedent(
         entries = [item for item in _read_json(root / "manifest.json")["people"] if item["split_role"] == role]
         if not entries:
             raise ValueError(f"no people for split role={role}")
+        per_person_caps = {}
+        if cap > 0:
+            base_cap, remainder = divmod(cap, len(entries))
+            per_person_caps = {
+                offset: max(1, base_cap + int(offset < remainder))
+                for offset in range(len(entries))
+            }
         columns = ["person_key", "timestamp_utc", "event_binary", "hard_negative", *feature_names]
         frames = []
         for offset, entry in enumerate(entries):
@@ -91,22 +98,21 @@ NOTEBOOK_SOURCE = dedent(
             if role == "train":
                 frame = frame.loc[select_training_rows(frame, target="event_binary", baseline_ratio=3)]
             frame = frame.reset_index(drop=True)
-            if cap > 0 and len(frame) > cap:
+            person_cap = per_person_caps.get(offset, cap)
+            if cap > 0 and len(frame) > person_cap:
                 positive = frame["event_binary"].astype(bool).to_numpy()
                 hard_negative = frame["hard_negative"].astype(bool).to_numpy()
                 must_keep = np.flatnonzero(positive | hard_negative)
-                if len(must_keep) < cap:
+                if len(must_keep) < person_cap:
                     candidates = np.flatnonzero(~(positive | hard_negative))
                     rng = np.random.default_rng(seed + offset)
-                    extra = rng.choice(candidates, size=min(cap - len(must_keep), len(candidates)), replace=False)
+                    extra = rng.choice(candidates, size=min(person_cap - len(must_keep), len(candidates)), replace=False)
                     keep = np.sort(np.concatenate([must_keep, extra]))
                 else:
-                    keep = must_keep[:cap]
+                    keep = must_keep[:person_cap]
                 frame = frame.iloc[keep].reset_index(drop=True)
             frames.append(frame)
         result = pd.concat(frames, ignore_index=True)
-        if cap > 0 and len(result) > cap:
-            result = result.iloc[:cap].reset_index(drop=True)
         return result
 
 
@@ -141,7 +147,7 @@ NOTEBOOK_SOURCE = dedent(
         return labels.get(parts[0], parts[0]) if len(parts) == 1 else f"{labels.get(parts[0], parts[0])} · {parts[1]}"
 
 
-    def _render(metrics: pd.DataFrame, importance: pd.DataFrame, summary: pd.DataFrame, out: Path, font_path: str) -> None:
+    def _render(metrics: pd.DataFrame, importance: pd.DataFrame, summary: pd.DataFrame, out: Path, font_path: str, ablation: pd.DataFrame, permutation: pd.DataFrame, gate: pd.DataFrame) -> None:
         labels = {**TREE_MODEL_LABELS_KO, "existing_hist_gradient_boosting": "기존 HGB", "existing_logistic_regression": "기존 Logistic"}
         names = [labels.get(str(value), str(value)) for value in metrics["model_id"]]
         colors = ["#7f8c8d" if str(value).startswith("existing_") else "#e15759" if value == "soft_ensemble" else "#20639b" for value in metrics["model_id"]]
@@ -179,13 +185,51 @@ NOTEBOOK_SOURCE = dedent(
         axis.grid(alpha=0.25)
         fig.savefig(out.with_name(out.stem + "_stability.png"), dpi=160, bbox_inches="tight")
         plt.close(fig)
+        merged = metrics.loc[metrics["model_id"].isin(TREE_MODEL_IDS)].merge(
+            ablation.loc[ablation["model_id"].isin(TREE_MODEL_IDS)],
+            on="model_id", suffixes=("_full", "_without_time"), validate="one_to_one"
+        )
+        fig, axes = plt.subplots(1, 2, figsize=(13, 5), constrained_layout=True)
+        labels = [TREE_MODEL_LABELS_KO[str(value)] for value in merged["model_id"]]
+        drops = (
+            (merged["aucpr_full"] - merged["aucpr_without_time"])
+            / merged["aucpr_full"].abs().clip(lower=1e-12) * 100.0,
+            (merged["event_recall_full"] - merged["event_recall_without_time"]) * 100.0,
+        )
+        for axis, values, title in zip(axes, drops, ("AUCPR 상대 저하율(%)", "recall 절대 저하(%p)"), strict=True):
+            axis.bar(labels, values, color="#f28e2b")
+            axis.axhline(0.0, color="#333333", linewidth=0.8)
+            axis.set_title(title)
+            axis.tick_params(axis="x", rotation=18)
+            axis.grid(axis="y", alpha=0.25)
+        fig.suptitle("시간 피처 제거 후 성능 유지 점검", fontsize=15)
+        fig.savefig(out.with_name(out.stem + "_ablation.png"), dpi=160, bbox_inches="tight")
+        plt.close(fig)
+        permutation_plot = permutation.copy()
+        permutation_plot["label"] = permutation_plot.apply(
+            lambda row: f"{TREE_MODEL_LABELS_KO.get(str(row['model_id']), row['model_id'])} · {row['group_id']}",
+            axis=1,
+        )
+        fig, axis = plt.subplots(figsize=(11, 6), constrained_layout=True)
+        ordered = permutation_plot.sort_values("mean_importance_drop", kind="mergesort")
+        axis.barh(ordered["label"], ordered["mean_importance_drop"], color="#59a14f")
+        axis.axvline(0.0, color="#333333", linewidth=0.8)
+        axis.set_xlabel("사람별 AUCPR permutation 감소량")
+        axis.set_title("사람별 파생변수 그룹 중요도")
+        axis.grid(axis="x", alpha=0.25)
+        fig.savefig(out.with_name(out.stem + "_permutation.png"), dpi=160, bbox_inches="tight")
+        plt.close(fig)
         receipt = {
-            "schema_version": "goal1.5/kaggle-tree-benchmark/v1",
+            "schema_version": "goal1.5/kaggle-tree-benchmark/v2",
             "font_family": "NanumGothic", "font_path": font_path,
             "data_status": "oracle/sanity", "real_data_status": "NOT VERIFIED",
             "locked_test_read": False, "extra_trees_included": False,
             "metrics": metrics.to_dict(orient="records"),
             "importance_summary": summary.to_dict(orient="records"),
+            "time_ablation_metrics": ablation.to_dict(orient="records"),
+            "permutation_summary": permutation.to_dict(orient="records"),
+            "anchor_gate": gate.to_dict(orient="records"),
+            "challenger_anchor_model": None,
         }
         out.with_suffix(".artifact.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n")
 
@@ -195,11 +239,16 @@ NOTEBOOK_SOURCE = dedent(
         wheel = _install_wheel_if_present()
         from multisensor_ml.models import select_training_rows
         from multisensor_ml.tree_benchmark import (
+            evaluate_anchor_gate,
+            feature_group_map,
             TREE_MODEL_IDS,
             TREE_MODEL_LABELS_KO,
             TreeBenchmarkConfig,
             fit_tree_challengers,
+            permutation_importance_by_person,
             reference_metrics_from_validation,
+            select_gated_anchor_model,
+            summarize_permutation_importance,
         )
         manifest = _read_json(dataset_root / "manifest.json")
         feature_names = [str(item) for item in manifest["feature_names"]]
@@ -213,18 +262,53 @@ NOTEBOOK_SOURCE = dedent(
             validation_timestamps=validation["timestamp_utc"].tolist(),
             validation_groups=validation["person_key"].tolist(),
         )
+        feature_groups = feature_group_map(feature_names)
+        without_time_names = [name for name in feature_names if name not in set(feature_groups.get("time", ()))]
+        time_result = fit_tree_challengers(
+            train[without_time_names].astype("float32"), train["event_binary"].to_numpy("int8"),
+            validation[without_time_names].astype("float32"), validation["event_binary"].to_numpy("int8"),
+            config=TreeBenchmarkConfig(seed_count=SEED_COUNT, n_estimators=N_ESTIMATORS, threshold=THRESHOLD, n_jobs=N_JOBS),
+            validation_timestamps=validation["timestamp_utc"].tolist(),
+            validation_groups=validation["person_key"].tolist(),
+        )
+        permutation_detail = permutation_importance_by_person(
+            result.fitted_models, validation[feature_names], validation["event_binary"].to_numpy("int8"),
+            validation["person_key"].tolist(), feature_groups,
+            repeats=3, random_state=20260725,
+        )
+        permutation_summary = summarize_permutation_importance(permutation_detail)
         metrics = result.metrics.copy()
+        metrics["feature_set"] = "full"
         metrics["evaluation_scope"] = "bounded_validation_sample"
+        ablation = time_result.metrics.copy()
+        ablation["feature_set"] = "without_time"
+        ablation["evaluation_scope"] = "bounded_validation_sample"
+        gate = evaluate_anchor_gate(
+            metrics.loc[metrics["model_id"].isin(TREE_MODEL_IDS)],
+            ablation.loc[ablation["model_id"].isin(TREE_MODEL_IDS)],
+            permutation_summary,
+        )
+        gated_anchor = select_gated_anchor_model(metrics.loc[metrics["model_id"].isin(TREE_MODEL_IDS)], result.importance_summary, gate)
         reference_paths = sorted(Path("/kaggle/input").rglob("validation_metrics.parquet"))
         if reference_paths:
-            metrics = pd.concat([reference_metrics_from_validation(pd.read_parquet(reference_paths[0])), metrics], ignore_index=True)
+            references = reference_metrics_from_validation(pd.read_parquet(reference_paths[0]))
+            references["feature_set"] = "full"
+            metrics = pd.concat([references, metrics], ignore_index=True)
         OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
         font_path = _configure_nanum()
         metrics.to_parquet(OUTPUT_ROOT / "metrics.parquet", index=False)
+        ablation.to_parquet(OUTPUT_ROOT / "ablation_metrics.parquet", index=False)
+        permutation_detail.to_parquet(OUTPUT_ROOT / "permutation_detail.parquet", index=False)
+        permutation_summary.to_parquet(OUTPUT_ROOT / "permutation_summary.parquet", index=False)
         result.feature_importance.to_parquet(OUTPUT_ROOT / "importance.parquet", index=False)
         result.predictions.to_parquet(OUTPUT_ROOT / "predictions.parquet", index=False)
-        _render(metrics, result.feature_importance, result.importance_summary, OUTPUT_ROOT / "tree_model_benchmark", font_path)
-        print(json.dumps({"status": "READY", "wheel": wheel, "anchor_model": result.anchor_model, "output": str(OUTPUT_ROOT)}, ensure_ascii=False))
+        _render(metrics.loc[metrics["feature_set"].eq("full")], result.feature_importance, result.importance_summary, OUTPUT_ROOT / "tree_model_benchmark", font_path, ablation, permutation_summary, gate)
+        receipt = json.loads((OUTPUT_ROOT / "tree_model_benchmark.artifact.json").read_text())
+        receipt["challenger_anchor_model"] = gated_anchor
+        receipt["anchor_gate_status"] = "PASS" if gated_anchor else "FAIL"
+        receipt["anchor_gate_status_ko"] = "통과" if gated_anchor else "실패"
+        (OUTPUT_ROOT / "tree_model_benchmark.artifact.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n")
+        print(json.dumps({"status": "READY", "wheel": wheel, "anchor_model": gated_anchor, "candidate_anchor_model": result.anchor_model, "anchor_gate_status": receipt["anchor_gate_status"], "output": str(OUTPUT_ROOT)}, ensure_ascii=False))
     else:
         print("RUN_TRAINING=False; no fit executed")
     ''').strip()

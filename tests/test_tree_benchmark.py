@@ -9,11 +9,16 @@ import pandas as pd
 
 from multisensor_ml.tree_benchmark import (
     TreeBenchmarkConfig,
+    evaluate_anchor_gate,
+    feature_group_map,
     feature_importance_table,
     fit_tree_challengers,
+    permutation_importance_by_person,
     reference_metrics_from_validation,
     select_anchor_model,
+    select_gated_anchor_model,
     summarize_feature_importance,
+    summarize_permutation_importance,
     weighted_soft_average,
 )
 
@@ -65,6 +70,117 @@ def test_weighted_soft_average_is_deterministic_and_normalized() -> None:
     )
 
     np.testing.assert_allclose(result, np.array([0.3, 0.7]))
+
+
+def test_feature_group_map_separates_derived_and_time_features() -> None:
+    groups = feature_group_map(
+        [
+            "autonomic_arousal__mean_300s",
+            "sensory_context__std_30s",
+            "time_cos",
+            "weekday_sin",
+            "context__wake_rest",
+            "is_awake",
+            "quality__missing_ratio",
+        ]
+    )
+
+    assert groups["derived_signal"] == (
+        "autonomic_arousal__mean_300s",
+        "sensory_context__std_30s",
+    )
+    assert groups["time"] == ("time_cos", "weekday_sin")
+    assert groups["context"] == ("context__wake_rest", "is_awake")
+    assert groups["other"] == ("quality__missing_ratio",)
+
+
+class _DerivedProbabilityModel:
+    def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
+        value = features["autonomic_arousal__mean_5s"].to_numpy(dtype="float64")
+        probability = np.where(value > 0.5, 0.9, 0.1)
+        return np.column_stack([1.0 - probability, probability])
+
+
+def test_permutation_importance_is_positive_repeatedly_per_person() -> None:
+    rows: list[dict[str, object]] = []
+    for person_index in range(4):
+        for event in (0, 0, 0, 1, 1, 1):
+            rows.append(
+                {
+                    "person_key": f"P{person_index}",
+                    "autonomic_arousal__mean_5s": float(event),
+                    "time_cos": float(event),
+                }
+            )
+    features = pd.DataFrame(rows).drop(columns="person_key")
+    target = np.tile(np.array([0, 0, 0, 1, 1, 1], dtype="int8"), 4)
+    groups = np.repeat([f"P{index}" for index in range(4)], 6)
+    detail = permutation_importance_by_person(
+        {"xgboost": (_DerivedProbabilityModel(),)},
+        features,
+        target,
+        groups,
+        {"derived_signal": ("autonomic_arousal__mean_5s",), "time": ("time_cos",)},
+        repeats=5,
+        random_state=11,
+    )
+    summary = summarize_permutation_importance(detail)
+
+    derived = summary.loc[
+        summary["group_id"].eq("derived_signal") & summary["model_id"].eq("xgboost")
+    ].iloc[0]
+    assert derived["mean_importance_drop"] > 0.0
+    assert derived["positive_person_fraction"] >= 0.75
+    assert bool(derived["repeated_positive"]) is True
+
+
+def test_anchor_gate_requires_time_ablation_and_derived_group_support() -> None:
+    full = pd.DataFrame(
+        [
+            {"model_id": "xgboost", "aucpr": 0.80, "event_recall": 0.70},
+            {"model_id": "lightgbm", "aucpr": 0.81, "event_recall": 0.71},
+        ]
+    )
+    ablation = pd.DataFrame(
+        [
+            {"model_id": "xgboost", "aucpr": 0.79, "event_recall": 0.69},
+            {"model_id": "lightgbm", "aucpr": 0.60, "event_recall": 0.70},
+        ]
+    )
+    permutation = pd.DataFrame(
+        [
+            {
+                "model_id": "xgboost",
+                "group_id": "derived_signal",
+                "mean_importance_drop": 0.02,
+                "positive_person_fraction": 1.0,
+                "mean_person_repeat_positive_rate": 0.9,
+            },
+            {
+                "model_id": "lightgbm",
+                "group_id": "derived_signal",
+                "mean_importance_drop": -0.01,
+                "positive_person_fraction": 0.5,
+                "mean_person_repeat_positive_rate": 0.4,
+            },
+        ]
+    )
+    gate = evaluate_anchor_gate(full, ablation, permutation)
+
+    assert bool(gate.loc[gate["model_id"].eq("xgboost"), "gate_pass"].iloc[0]) is True
+    assert bool(gate.loc[gate["model_id"].eq("lightgbm"), "gate_pass"].iloc[0]) is False
+    stability = pd.DataFrame(
+        [
+            {"model_id": "xgboost", "importance_variance_mean": 0.01, "top3_share": 0.4},
+            {"model_id": "lightgbm", "importance_variance_mean": 0.001, "top3_share": 0.3},
+        ]
+    )
+    gated_metrics = full.assign(
+        event_f1=0.7,
+        false_alerts_per_hour=0.1,
+        calibration_error=0.1,
+    )
+    assert select_gated_anchor_model(gated_metrics, stability, gate) == "xgboost"
 
 
 def test_anchor_prefers_stable_model_within_aucpr_guardrail() -> None:
@@ -197,5 +313,10 @@ def test_kaggle_tree_notebook_is_cpu_only_and_locked_test_safe() -> None:
     assert "N_JOBS = 1" in source
     assert "NanumGothic" in source
     assert "soft_ensemble" in source
+    assert "feature_group_map" in source
+    assert "permutation_importance_by_person" in source
+    assert "evaluate_anchor_gate" in source
+    assert "permutation_summary.parquet" in source
+    assert "time_ablation_metrics" in source
     assert metadata["enable_gpu"] is False
     assert metadata["enable_internet"] is False

@@ -12,14 +12,26 @@ th:first-child,td:first-child{text-align:left}
 실제 정확도는 <b>NOT VERIFIED</b>이며 locked test는 읽지 않았습니다.</div>
 <p>도전자 앵커: <b>lightgbm</b>
 · 운영 기준 모델: <b>existing_hist_gradient_boosting</b>
-· 승격 상태: <b>승격 보류(평가 범위·임계값 불일치)</b>
-· 폰트: <b>NanumGothic</b> · 실행 시각: 2026-08-02T21:22:50+09:00</p>
+· 감사 게이트: <b>통과</b>
+· 폰트: <b>NanumGothic</b> · 실행 시각: 2026-08-03T14:15:36+09:00</p>
 <img src="tree_model_benchmark_ko_metrics.png" alt="모델 지표 비교 그래프">
 <img src="tree_model_benchmark_ko_importance.png" alt="피처 중요도 그래프">
 <img src="tree_model_benchmark_ko_stability.png" alt="성능과 중요도 안정성 그래프">
-<table><thead><tr><th>모델</th><th>AUCPR</th><th>사건 F1</th>
-<th>시간당 오탐</th><th>Brier</th><th>ECE</th><th>평가 범위</th><th>앵커</th></tr></thead>
-<tbody><tr><td>기존 Logistic</td><td>0.24672272552005048</td><td>0.6634615384615384</td><td>0.09722222222222222</td><td>0.17462006968535265</td><td>0.36512159763983054</td><td>existing_full_validation</td><td>nan</td></tr><tr><td>기존 HGB</td><td>0.511066967178253</td><td>0.7413793103448276</td><td>0.005555555555555556</td><td>0.06428751338937501</td><td>0.183715706265556</td><td>existing_full_validation</td><td>nan</td></tr><tr><td>XGBoost</td><td>0.6527114072825485</td><td>0.5856152512998267</td><td>13.888260853796774</td><td>0.11424789035622725</td><td>0.10988214081227704</td><td>bounded_validation_sample</td><td>lightgbm</td></tr><tr><td>LightGBM</td><td>0.6591881103567877</td><td>0.5967707304504659</td><td>13.979932542600714</td><td>0.10965407240789471</td><td>0.09297316458478631</td><td>bounded_validation_sample</td><td>lightgbm</td></tr><tr><td>소프트 앙상블</td><td>0.658314881804665</td><td>0.5946810810810811</td><td>13.482683079088439</td><td>0.11122181047936562</td><td>0.1013591817390833</td><td>bounded_validation_sample</td><td>lightgbm</td></tr></tbody></table>
-<p>ExtraTrees는 요청대로 이번 비교에서 제외하고 마지막 후보로 남겼습니다.
-도전자와 기존 HGB는 평가 범위·임계값이 달라 자동 승격하지 않았습니다.</p>
+<img src="tree_model_benchmark_ko_ablation.png" alt="시간 피처 제거 성능 그래프">
+<img src="tree_model_benchmark_ko_permutation.png" alt="사람별 파생변수 permutation 중요도 그래프">
+<table><thead><tr><th>모델</th><th>AUCPR</th><th>사건 recall</th><th>사건 F1</th>
+<th>시간당 오탐</th><th>Brier</th><th>ECE</th><th>평가 범위</th></tr></thead>
+<tbody><tr><td>기존 Logistic</td><td>0.24672272552005048</td><td>1.0</td><td>0.6634615384615384</td><td>0.09722222222222222</td><td>0.17462006968535265</td><td>0.36512159763983054</td><td>existing_full_validation</td></tr><tr><td>기존 HGB</td><td>0.511066967178253</td><td>0.6231884057971014</td><td>0.7413793103448276</td><td>0.005555555555555556</td><td>0.06428751338937501</td><td>0.183715706265556</td><td>existing_full_validation</td></tr><tr><td>XGBoost</td><td>0.6590467755429836</td><td>0.4962831666335076</td><td>0.5957359039492824</td><td>13.04214970924849</td><td>0.11157079595179818</td><td>0.1044703094054443</td><td>bounded_validation_sample</td></tr><tr><td>LightGBM</td><td>0.6589559286274294</td><td>0.49800141076886906</td><td>0.5961740410743864</td><td>13.258824400903737</td><td>0.10838682122776676</td><td>0.0859090509998733</td><td>bounded_validation_sample</td></tr><tr><td>소프트 앙상블</td><td>0.6611066658813025</td><td>0.4995930474416249</td><td>0.6001716514389388</td><td>12.689358865143152</td><td>0.10931654062062347</td><td>0.09547523300275668</td><td>bounded_validation_sample</td></tr></tbody></table>
+<h2>앵커 채택 게이트</h2>
+<p>시간 피처 제거 후 AUCPR 상대 저하 ≤
+5.00%,
+사건 recall 절대 저하 ≤
+5.00%,
+파생변수 그룹의 사람별 반복 양수 비율 ≥ 80%를
+사전에 고정했습니다.</p>
+<table><thead><tr><th>모델</th><th>AUCPR 저하</th><th>recall 저하</th>
+<th>파생변수 평균 drop</th><th>양수 사람 비율</th><th>게이트</th><th>사유</th></tr></thead>
+<tbody><tr><td>lightgbm</td><td>0.0</td><td>0.0</td><td>0.4731594146262421</td><td>1.0</td><td>True</td><td>PASS</td></tr><tr><td>xgboost</td><td>0.0</td><td>0.0</td><td>0.473603921301764</td><td>1.0</td><td>True</td><td>PASS</td></tr></tbody></table>
+<p>ExtraTrees는 마지막 후보로 보류했습니다. 도전자와 기존 HGB는 평가 범위·임계값이
+달라 직접 승격 비교하지 않았습니다.</p>
 </body></html>
