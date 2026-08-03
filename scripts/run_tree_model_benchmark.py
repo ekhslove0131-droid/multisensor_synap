@@ -205,8 +205,17 @@ def _feature_label_ko(name: str) -> str:
 
 def _importance_plot(summary: pd.DataFrame, importance: pd.DataFrame, output: Path) -> None:
     model_ids = [model_id for model_id in TREE_MODEL_IDS if model_id in set(importance["model_id"])]
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8), constrained_layout=True)
-    for axis, model_id in zip(axes, model_ids, strict=False):
+    ncols = min(3, max(1, len(model_ids)))
+    nrows = int(np.ceil(len(model_ids) / ncols))
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(8 * ncols, 7 * nrows),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    axes_flat = axes.ravel()
+    for axis, model_id in zip(axes_flat, model_ids, strict=False):
         model_table = importance.loc[importance["model_id"].eq(model_id)]
         means = (
             model_table.groupby("feature_name", sort=True)["normalized_importance"]
@@ -223,6 +232,8 @@ def _importance_plot(summary: pd.DataFrame, importance: pd.DataFrame, output: Pa
         axis.set_title(f"{TREE_MODEL_LABELS_KO[model_id]} 상위 피처 중요도")
         axis.set_xlabel("평균 정규화 중요도")
         axis.grid(axis="x", alpha=0.25)
+    for axis in axes_flat[len(model_ids) :]:
+        axis.axis("off")
     fig.suptitle("피처 중요도 퍼짐과 안정성 확인", fontsize=16)
     fig.savefig(output, dpi=160, bbox_inches="tight")
     plt.close(fig)
@@ -385,6 +396,7 @@ th:first-child,td:first-child{{text-align:left}}
 <p>도전자 앵커: <b>{anchor}</b>
 · 운영 기준 모델: <b>{artifact['operational_reference_model']}</b>
 · 감사 게이트: <b>{artifact['anchor_gate_status_ko']}</b>
+· GPU 요청: <b>{artifact['config']['use_gpu']}</b>
 · 폰트: <b>NanumGothic</b> · 실행 시각: {artifact['generated_at']}</p>
 <img src="{metric_png.name}" alt="모델 지표 비교 그래프">
 <img src="{importance_png.name}" alt="피처 중요도 그래프">
@@ -404,8 +416,9 @@ th:first-child,td:first-child{{text-align:left}}
 <table><thead><tr><th>모델</th><th>AUCPR 저하</th><th>recall 저하</th>
 <th>파생변수 평균 drop</th><th>양수 사람 비율</th><th>게이트</th><th>사유</th></tr></thead>
 <tbody>{gate_rows}</tbody></table>
-<p>ExtraTrees는 마지막 후보로 보류했습니다. 도전자와 기존 HGB는 평가 범위·임계값이
-달라 직접 승격 비교하지 않았습니다.</p>
+<p>ExtraTrees는 scikit-learn CUDA 구현이 없어 CPU 후보로 별도 기록했습니다. GPU 요청 시
+XGBoost·LightGBM은 GPU 실행이 확인되지 않으면 실패하도록 구성했습니다. 도전자와 기존
+HGB는 평가 범위·임계값이 달라 직접 운영 승격 비교하지 않았습니다.</p>
 </body></html>"""
     output.write_text(html, encoding="utf-8")
 
@@ -419,6 +432,11 @@ def main() -> int:
     parser.add_argument("--max-validation-rows", type=int, default=300_000)
     parser.add_argument("--seed-count", type=int, default=3)
     parser.add_argument("--n-estimators", type=int, default=160)
+    parser.add_argument("--include-extra-trees", action="store_true")
+    parser.add_argument("--extra-trees-estimators", type=int, default=64)
+    parser.add_argument("--use-gpu", action="store_true")
+    parser.add_argument("--gpu-required", action="store_true")
+    parser.add_argument("--gpu-device", default="cuda")
     parser.add_argument("--threshold", type=float, default=0.5)
     args = parser.parse_args()
     font_family = _configure_korean_font()
@@ -446,6 +464,11 @@ def main() -> int:
     config = TreeBenchmarkConfig(
         seed_count=args.seed_count,
         n_estimators=args.n_estimators,
+        include_extra_trees=args.include_extra_trees,
+        extra_trees_n_estimators=args.extra_trees_estimators,
+        use_gpu=args.use_gpu,
+        gpu_required=args.gpu_required,
+        gpu_device=args.gpu_device,
         threshold=args.threshold,
         n_jobs=1,
     )
@@ -560,13 +583,14 @@ def main() -> int:
     )
     artifact: dict[str, Any] = {
         "schema_version": "goal1.5/tree-model-benchmark/v2",
+        "status": "READY",
         "generated_at": generated_at,
         "language": "ko",
         "font_family": font_family,
         "data_status": "oracle/sanity",
         "real_data_status": "NOT VERIFIED",
         "locked_test_read": False,
-        "extra_trees_included": False,
+        "extra_trees_included": bool(config.include_extra_trees),
         "anchor_model": gated_anchor,
         "candidate_anchor_model": result.anchor_model,
         "challenger_anchor_model": gated_anchor,
@@ -579,6 +603,7 @@ def main() -> int:
         "permutation_summary": permutation_summary.to_dict(orient="records"),
         "time_ablation_metrics": time_ablation_metrics.to_dict(orient="records"),
         "feature_groups": {key: list(value) for key, value in feature_groups.items()},
+        "candidate_model_ids": list(result.fitted_models or {}),
         "config": {
             "series": args.series,
             "train_row_cap": args.max_train_rows,
@@ -589,6 +614,11 @@ def main() -> int:
             "n_estimators": args.n_estimators,
             "threshold": args.threshold,
             "n_jobs": 1,
+            "include_extra_trees": config.include_extra_trees,
+            "extra_trees_n_estimators": config.extra_trees_n_estimators,
+            "use_gpu": config.use_gpu,
+            "gpu_required": config.gpu_required,
+            "gpu_device": config.gpu_device,
             "time_ablation_aucpr_relative_drop_limit": (
                 config.time_ablation_aucpr_relative_drop_limit
             ),
@@ -634,6 +664,9 @@ def main() -> int:
                 "anchor_model": gated_anchor,
                 "candidate_anchor_model": result.anchor_model,
                 "anchor_gate_status": "PASS" if gate_passed else "FAIL",
+                "candidate_model_ids": list(result.fitted_models or {}),
+                "use_gpu": config.use_gpu,
+                "gpu_required": config.gpu_required,
                 "metrics": str(metrics_path),
                 "report": str(output),
                 "artifact": str(artifact_path),

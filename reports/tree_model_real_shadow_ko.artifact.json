@@ -1,0 +1,46 @@
+{
+  "schema_version": "goal1.5/tree-model-real-shadow/v1",
+  "status": "BLOCKED_NOT_MODEL_READY",
+  "prediction_executed": false,
+  "accuracy_status": "NOT VERIFIED",
+  "locked_test_read": false,
+  "data_status": "observed/neon",
+  "real_data_status": "NOT VERIFIED",
+  "adapter_status": "OBSERVED_BASELINE_ONLY",
+  "source": {
+    "provider": "Neon Postgres",
+    "environment": "production",
+    "database": "neondb",
+    "table": "public.sensor_batches",
+    "access": "read_only"
+  },
+  "observed_snapshot": {
+    "row_count": 3284,
+    "session_count": 11,
+    "sensor_path_count": 5,
+    "status_counts": {
+      "not_configured": 3163,
+      "insufficient_signal": 121
+    },
+    "corrected_timestamp_rows": 0,
+    "stage_rows": 0,
+    "model_version_rows": 0,
+    "first_received_at": "2026-08-02T05:10:01.323585Z",
+    "last_received_at": "2026-08-02T08:47:48.874365Z",
+    "sensor_path_counts": {
+      "/kidsignal/v1/sensor-batch": 741,
+      "/kidsignal/v1/accelerometer-batch": 708,
+      "/kidsignal/v1/ppg-batch": 1061,
+      "/kidsignal/v1/skin-temperature-batch": 17,
+      "/kidsignal/v1/eda-batch": 757
+    }
+  },
+  "blockers": [
+    "MODEL_READY_FALSE",
+    "CORRECTED_UTC_MISSING",
+    "OBSERVER_STAGE_LABELS_MISSING",
+    "MODEL_VERSION_NOT_REGISTERED",
+    "REAL_DATA_NOT_VERIFIED"
+  ],
+  "next_safe_action": "corrected_utc와 독립 관찰 onset/peak/recovery/end 라벨을 등록한 뒤, model-ready schema hash를 확인하고 shadow prediction을 재실행한다."
+}

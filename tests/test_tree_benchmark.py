@@ -6,9 +6,13 @@ from pathlib import Path
 import nbformat
 import numpy as np
 import pandas as pd
+import pytest
 
 from multisensor_ml.tree_benchmark import (
+    GPU_TREE_MODEL_IDS,
+    TREE_MODEL_IDS,
     TreeBenchmarkConfig,
+    build_tree_candidates,
     evaluate_anchor_gate,
     feature_group_map,
     feature_importance_table,
@@ -271,6 +275,54 @@ def test_xgboost_lightgbm_challengers_and_ensemble_share_contract() -> None:
     assert set(result.feature_importance["model_id"]) == {"xgboost", "lightgbm"}
 
 
+def test_extra_trees_is_opt_in_and_cpu_device_is_recorded() -> None:
+    rng = np.random.default_rng(17)
+    features = pd.DataFrame(rng.normal(size=(50, 4)), columns=["f_a", "f_b", "f_c", "f_d"])
+    target = (features["f_a"] + features["f_b"] > 0).astype("int8")
+    config = TreeBenchmarkConfig(
+        seed_count=1,
+        n_estimators=4,
+        extra_trees_n_estimators=4,
+        include_extra_trees=True,
+        n_jobs=1,
+    )
+    candidates = build_tree_candidates(config, seed=1)
+    assert set(candidates) == set(TREE_MODEL_IDS)
+    assert set(GPU_TREE_MODEL_IDS) == {"xgboost", "lightgbm"}
+    result = fit_tree_challengers(
+        features.iloc[:35],
+        target.iloc[:35],
+        features.iloc[35:],
+        target.iloc[35:],
+        config=config,
+    )
+
+    assert set(result.metrics["model_id"]) == {
+        "xgboost",
+        "lightgbm",
+        "extra_trees",
+        "soft_ensemble",
+    }
+    extra = result.metrics.loc[result.metrics["model_id"].eq("extra_trees")].iloc[0]
+    assert extra["execution_device"] == "cpu"
+    assert bool(extra["gpu_requested"]) is False
+
+
+def test_gpu_required_cannot_be_silently_disabled() -> None:
+    with pytest.raises(ValueError, match="gpu_required"):
+        TreeBenchmarkConfig(use_gpu=False, gpu_required=True).validate()
+
+
+def test_gpu_config_is_forwarded_to_boosters_without_cpu_fallback() -> None:
+    candidates = build_tree_candidates(
+        TreeBenchmarkConfig(use_gpu=True, gpu_required=True),
+        seed=1,
+    )
+
+    assert candidates["xgboost"].get_params()["device"] == "cuda"
+    assert candidates["lightgbm"].get_params()["device_type"] == "gpu"
+
+
 def test_reference_metrics_keep_existing_hgb_and_logistic_rows_separate() -> None:
     source = pd.DataFrame(
         [
@@ -301,7 +353,7 @@ def test_reference_metrics_keep_existing_hgb_and_logistic_rows_separate() -> Non
     assert result.loc[0, "evaluation_scope"] == "existing_full_validation"
 
 
-def test_kaggle_tree_notebook_is_cpu_only_and_locked_test_safe() -> None:
+def test_kaggle_tree_notebook_requires_gpu_and_keeps_locked_test_safe() -> None:
     notebook = nbformat.read("kaggle/09_tree_model_benchmark.ipynb", as_version=4)
     source = "\n".join(cell.source for cell in notebook.cells)
     metadata = json.loads(
@@ -309,7 +361,9 @@ def test_kaggle_tree_notebook_is_cpu_only_and_locked_test_safe() -> None:
     )
 
     assert "RUN_LOCKED_TEST = False" in source
-    assert "USE_GPU = False" in source
+    assert "USE_GPU = True" in source
+    assert "GPU_REQUIRED = True" in source
+    assert "INCLUDE_EXTRA_TREES = True" in source
     assert "N_JOBS = 1" in source
     assert "NanumGothic" in source
     assert "soft_ensemble" in source
@@ -318,5 +372,8 @@ def test_kaggle_tree_notebook_is_cpu_only_and_locked_test_safe() -> None:
     assert "evaluate_anchor_gate" in source
     assert "permutation_summary.parquet" in source
     assert "time_ablation_metrics" in source
-    assert metadata["enable_gpu"] is False
+    assert "_resolve_data_path" in source
+    assert "prepared__" in source
+    assert '"context"' in source
+    assert metadata["enable_gpu"] is True
     assert metadata["enable_internet"] is False

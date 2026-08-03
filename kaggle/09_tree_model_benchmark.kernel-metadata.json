@@ -1,13 +1,13 @@
 {
-  "id": "bjcoding/multisensor-goal15-tree-benchmark",
-  "title": "Multisensor Goal15 XGBoost LightGBM Benchmark",
+  "id": "bjcoding/multisensor-goal15-gpu-tree-benchmark-extratrees",
+  "title": "Multisensor Goal15 GPU Tree Benchmark ExtraTrees",
   "code_file": "09_tree_model_benchmark.ipynb",
   "language": "python",
   "kernel_type": "notebook",
   "is_private": true,
-  "enable_gpu": false,
+  "enable_gpu": true,
   "enable_internet": false,
   "dataset_sources": [
-    "bjcoding/multisensor-goal15-oracle-mvp3"
+    "bjcoding/multisensor-goal15-tree-gpu-current-bounded"
   ]
 }

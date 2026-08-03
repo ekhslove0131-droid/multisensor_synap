@@ -26,36 +26,59 @@ NOTEBOOK_SOURCE = dedent(
     # Kaggle 실행 전 이 플래그만 명시적으로 확인합니다.
     RUN_TRAINING = True
     RUN_LOCKED_TEST = False
-    USE_GPU = False
+    USE_GPU = True
+    GPU_REQUIRED = True
+    INCLUDE_EXTRA_TREES = True
     N_JOBS = 1
     MAX_TRAIN_ROWS = 600_000
     MAX_VALIDATION_ROWS = 300_000
     SEED_COUNT = 3
     N_ESTIMATORS = 160
+    EXTRA_TREES_ESTIMATORS = 64
     THRESHOLD = 0.5
     DATASET_ROOT_OVERRIDE = None
     OUTPUT_ROOT = Path("/kaggle/working/tree_model_benchmark")
-    assert not RUN_LOCKED_TEST and not USE_GPU and N_JOBS == 1
+    assert not RUN_LOCKED_TEST and USE_GPU and GPU_REQUIRED and N_JOBS == 1
 
 
     def _read_json(path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
 
 
-    def _discover_dataset() -> Path:
+    def _resolve_data_path(root: Path, relative_path: str) -> Path:
+        direct = root / relative_path
+        if direct.is_file():
+            return direct
+        flattened_name = relative_path.replace("/", "__")
+        for prefix in ("prepared__", ""):
+            flattened = root / (prefix + flattened_name)
+            if flattened.is_file():
+                return flattened
+            matches = sorted(root.rglob(flattened.name))
+            if len(matches) == 1:
+                return matches[0]
+        raise FileNotFoundError(f"prepared file missing or ambiguous: {relative_path}")
+
+
+    def _discover_dataset() -> tuple[Path, Path]:
         if DATASET_ROOT_OVERRIDE:
             root = Path(DATASET_ROOT_OVERRIDE)
             if (root / "manifest.json").is_file():
-                return root
+                return root, root / "manifest.json"
+            prefixed = sorted(root.rglob("*manifest.json"))
+            for manifest_path in prefixed:
+                manifest = _read_json(manifest_path)
+                if manifest.get("prepared_schema") == "goal1.5/prepared/v1":
+                    return root, manifest_path
             raise FileNotFoundError(f"prepared manifest missing: {root}")
         candidates = []
-        for manifest_path in sorted(Path("/kaggle/input").rglob("manifest.json")):
+        for manifest_path in sorted(Path("/kaggle/input").rglob("*manifest.json")):
             try:
                 manifest = _read_json(manifest_path)
             except (OSError, json.JSONDecodeError):
                 continue
             if manifest.get("prepared_schema") == "goal1.5/prepared/v1":
-                candidates.append(manifest_path.parent)
+                candidates.append((manifest_path.parent, manifest_path))
         if len(candidates) != 1:
             raise RuntimeError(
                 "prepared Dataset manifest must be unique; "
@@ -80,8 +103,8 @@ NOTEBOOK_SOURCE = dedent(
         return "preinstalled"
 
 
-    def _load_split(root: Path, role: str, feature_names: list[str], cap: int, seed: int) -> pd.DataFrame:
-        entries = [item for item in _read_json(root / "manifest.json")["people"] if item["split_role"] == role]
+    def _load_split(root: Path, manifest_path: Path, role: str, feature_names: list[str], cap: int, seed: int) -> pd.DataFrame:
+        entries = [item for item in _read_json(manifest_path)["people"] if item["split_role"] == role]
         if not entries:
             raise ValueError(f"no people for split role={role}")
         per_person_caps = {}
@@ -91,10 +114,12 @@ NOTEBOOK_SOURCE = dedent(
                 offset: max(1, base_cap + int(offset < remainder))
                 for offset in range(len(entries))
             }
-        columns = ["person_key", "timestamp_utc", "event_binary", "hard_negative", *feature_names]
+        # ``context`` is an auxiliary deterministic sampling key used by
+        # select_training_rows; it is deliberately not a model feature.
+        columns = list(dict.fromkeys(["person_key", "timestamp_utc", "context", "event_binary", "hard_negative", *feature_names]))
         frames = []
         for offset, entry in enumerate(entries):
-            frame = pd.read_parquet(root / entry["path"], columns=columns)
+            frame = pd.read_parquet(_resolve_data_path(root, entry["path"]), columns=columns)
             if role == "train":
                 frame = frame.loc[select_training_rows(frame, target="event_binary", baseline_ratio=3)]
             frame = frame.reset_index(drop=True)
@@ -163,14 +188,20 @@ NOTEBOOK_SOURCE = dedent(
         fig.suptitle("XGBoost·LightGBM·앙상블 모델 비교", fontsize=16)
         fig.savefig(out.with_name(out.stem + "_metrics.png"), dpi=160, bbox_inches="tight")
         plt.close(fig)
-        fig, axes = plt.subplots(1, 2, figsize=(16, 8), constrained_layout=True)
-        for axis, model_id in zip(axes, TREE_MODEL_IDS, strict=True):
+        model_ids = [model_id for model_id in TREE_MODEL_IDS if model_id in set(importance["model_id"])]
+        ncols = min(3, max(1, len(model_ids)))
+        nrows = int(np.ceil(len(model_ids) / ncols))
+        fig, axes = plt.subplots(nrows, ncols, figsize=(8 * ncols, 7 * nrows), constrained_layout=True, squeeze=False)
+        axes_flat = axes.ravel()
+        for axis, model_id in zip(axes_flat, model_ids, strict=False):
             table = importance.loc[importance["model_id"].eq(model_id)]
             means = table.groupby("feature_name")["normalized_importance"].mean().nlargest(15).sort_values()
             axis.barh([_feature_label(name) for name in means.index], means.to_numpy(), color="#59a14f")
             axis.set_title(f"{TREE_MODEL_LABELS_KO[model_id]} 상위 피처 중요도")
             axis.set_xlabel("평균 정규화 중요도")
             axis.grid(axis="x", alpha=0.25)
+        for axis in axes_flat[len(model_ids):]:
+            axis.axis("off")
         fig.suptitle("피처 중요도 퍼짐과 안정성 확인", fontsize=16)
         fig.savefig(out.with_name(out.stem + "_importance.png"), dpi=160, bbox_inches="tight")
         plt.close(fig)
@@ -221,21 +252,26 @@ NOTEBOOK_SOURCE = dedent(
         plt.close(fig)
         receipt = {
             "schema_version": "goal1.5/kaggle-tree-benchmark/v2",
+            "status": "READY",
             "font_family": "NanumGothic", "font_path": font_path,
             "data_status": "oracle/sanity", "real_data_status": "NOT VERIFIED",
-            "locked_test_read": False, "extra_trees_included": False,
+            "locked_test_read": False,
             "metrics": metrics.to_dict(orient="records"),
             "importance_summary": summary.to_dict(orient="records"),
             "time_ablation_metrics": ablation.to_dict(orient="records"),
             "permutation_summary": permutation.to_dict(orient="records"),
             "anchor_gate": gate.to_dict(orient="records"),
             "challenger_anchor_model": None,
+            "candidate_model_ids": list(TREE_MODEL_IDS),
+            "use_gpu": USE_GPU,
+            "gpu_required": GPU_REQUIRED,
+            "extra_trees_included": INCLUDE_EXTRA_TREES,
         }
         out.with_suffix(".artifact.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n")
 
 
     if RUN_TRAINING:
-        dataset_root = _discover_dataset()
+        dataset_root, manifest_path = _discover_dataset()
         wheel = _install_wheel_if_present()
         from multisensor_ml.models import select_training_rows
         from multisensor_ml.tree_benchmark import (
@@ -250,15 +286,15 @@ NOTEBOOK_SOURCE = dedent(
             select_gated_anchor_model,
             summarize_permutation_importance,
         )
-        manifest = _read_json(dataset_root / "manifest.json")
+        manifest = _read_json(manifest_path)
         feature_names = [str(item) for item in manifest["feature_names"]]
-        train = _load_split(dataset_root, "train", feature_names, MAX_TRAIN_ROWS, 20260725)
-        validation = _load_split(dataset_root, "validation", feature_names, MAX_VALIDATION_ROWS, 20260802)
+        train = _load_split(dataset_root, manifest_path, "train", feature_names, MAX_TRAIN_ROWS, 20260725)
+        validation = _load_split(dataset_root, manifest_path, "validation", feature_names, MAX_VALIDATION_ROWS, 20260802)
         assert not any(item["split_role"] == "locked_test" for item in manifest["people"] if item["split_role"] in {"train", "validation"})
         result = fit_tree_challengers(
             train[feature_names].astype("float32"), train["event_binary"].to_numpy("int8"),
             validation[feature_names].astype("float32"), validation["event_binary"].to_numpy("int8"),
-            config=TreeBenchmarkConfig(seed_count=SEED_COUNT, n_estimators=N_ESTIMATORS, threshold=THRESHOLD, n_jobs=N_JOBS),
+            config=TreeBenchmarkConfig(seed_count=SEED_COUNT, n_estimators=N_ESTIMATORS, extra_trees_n_estimators=EXTRA_TREES_ESTIMATORS, include_extra_trees=INCLUDE_EXTRA_TREES, use_gpu=USE_GPU, gpu_required=GPU_REQUIRED, n_jobs=N_JOBS, threshold=THRESHOLD),
             validation_timestamps=validation["timestamp_utc"].tolist(),
             validation_groups=validation["person_key"].tolist(),
         )
@@ -267,7 +303,7 @@ NOTEBOOK_SOURCE = dedent(
         time_result = fit_tree_challengers(
             train[without_time_names].astype("float32"), train["event_binary"].to_numpy("int8"),
             validation[without_time_names].astype("float32"), validation["event_binary"].to_numpy("int8"),
-            config=TreeBenchmarkConfig(seed_count=SEED_COUNT, n_estimators=N_ESTIMATORS, threshold=THRESHOLD, n_jobs=N_JOBS),
+            config=TreeBenchmarkConfig(seed_count=SEED_COUNT, n_estimators=N_ESTIMATORS, extra_trees_n_estimators=EXTRA_TREES_ESTIMATORS, include_extra_trees=INCLUDE_EXTRA_TREES, use_gpu=USE_GPU, gpu_required=GPU_REQUIRED, n_jobs=N_JOBS, threshold=THRESHOLD),
             validation_timestamps=validation["timestamp_utc"].tolist(),
             validation_groups=validation["person_key"].tolist(),
         )
@@ -307,6 +343,7 @@ NOTEBOOK_SOURCE = dedent(
         receipt["challenger_anchor_model"] = gated_anchor
         receipt["anchor_gate_status"] = "PASS" if gated_anchor else "FAIL"
         receipt["anchor_gate_status_ko"] = "통과" if gated_anchor else "실패"
+        receipt["candidate_model_ids"] = list(result.fitted_models or {})
         (OUTPUT_ROOT / "tree_model_benchmark.artifact.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n")
         print(json.dumps({"status": "READY", "wheel": wheel, "anchor_model": gated_anchor, "candidate_anchor_model": result.anchor_model, "anchor_gate_status": receipt["anchor_gate_status"], "output": str(OUTPUT_ROOT)}, ensure_ascii=False))
     else:
@@ -324,14 +361,14 @@ def build_notebook() -> nbformat.NotebookNode:
     notebook.metadata["language_info"] = {"name": "python", "version": "3.12"}
     notebook.cells = [
         new_markdown_cell(
-            "# Goal 1.5 XGBoost·LightGBM·앙상블 비교\n\n"
+            "# Goal 1.5 GPU 트리 모델 비교\n\n"
             "합성 `oracle/sanity` 데이터의 train/validation만 사용합니다. "
-            "ExtraTrees는 마지막 후보로 보류하고, locked test는 열지 않습니다. "
-            "실제 성능은 `NOT VERIFIED`입니다."
+            "XGBoost·LightGBM은 GPU를 강제하고 ExtraTrees는 CPU 기준 후보로 함께 기록합니다. "
+            "locked test는 열지 않으며 실제 성능은 `NOT VERIFIED`입니다."
         ),
         new_markdown_cell(
             "## 실행 계약\n\n"
-            "`RUN_TRAINING=True`, `RUN_LOCKED_TEST=False`, `USE_GPU=False`, `N_JOBS=1`을 확인합니다. "
+            "`RUN_TRAINING=True`, `RUN_LOCKED_TEST=False`, `USE_GPU=True`, `GPU_REQUIRED=True`, `N_JOBS=1`을 확인합니다. "
             "입력 Dataset에는 prepared manifest와 새 `multisensor_ml` wheel을 연결하고, "
             "NanumGothic 폰트 Dataset을 함께 연결해야 한글 그래프가 생성됩니다."
         ),

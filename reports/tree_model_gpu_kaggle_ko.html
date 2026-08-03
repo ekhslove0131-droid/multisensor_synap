@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>GPU 트리 모델 비교</title>
+<style>
+body{font-family:Arial,'NanumGothic','Apple SD Gothic Neo',sans-serif;
+margin:1.4rem;color:#172033;line-height:1.45}
+h1{margin-bottom:.25rem} h2{margin-top:1.4rem}
+.status{background:#e8f5e9;border-left:4px solid #2e7d32;padding:.7rem}
+.warn{background:#fff8e1;border-left:4px solid #f9a825;padding:.7rem}
+table{border-collapse:collapse;width:100%;font-size:.86rem;margin:.5rem 0 1rem}
+th,td{border:1px solid #d9dee8;padding:.35rem;text-align:right} th{background:#eef2f7}
+th:first-child,td:first-child{text-align:left}
+.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem}
+.charts img{width:100%;border:1px solid #d9dee8} code{background:#f3f4f6;padding:.1rem .25rem}
+</style></head><body>
+<h1>ExtraTrees·XGBoost·LightGBM·앙상블 비교</h1>
+<div class="status">합성 oracle/sanity GPU 실행 검증 완료 · 실제 데이터 정확도 NOT VERIFIED</div>
+<p>Kaggle <code>bjcoding/multisensor-goal15-gpu-tree-benchmark-extratrees</code> v4에서 GPU를 켜고 실행했습니다.
+XGBoost·LightGBM은 <b>cuda</b> 요청·필수, ExtraTrees는 CUDA 구현이 없어 CPU 후보로 기록했습니다.
+실행 결과의 장치 메타데이터와 로그를 보존했으며, 자동 승격은 하지 않았습니다.</p>
+<div class="warn">이 결과는 train 24명·validation 6명만 사용한 합성 oracle/sanity 결과입니다.
+locked test는 읽지 않았고, Neon 실제 데이터 정확도·행동 예측 성능은
+아직 <b>NOT VERIFIED</b>입니다.</div>
+<h2>전체 validation 지표</h2><table><thead><tr><th>모델</th><th>실행 장치</th><th>AUCPR</th><th>사건 recall</th><th>사건 F1</th><th>시간당 오탐</th><th>Brier</th><th>ECE</th></tr></thead><tbody><tr><td>xgboost</td><td>cuda</td><td>0.829549</td><td>0.566225</td><td>0.674204</td><td>8.714746</td><td>0.167791</td><td>0.032392</td></tr><tr><td>lightgbm</td><td>cuda</td><td>0.830078</td><td>0.567165</td><td>0.678253</td><td>8.085417</td><td>0.169417</td><td>0.042910</td></tr><tr><td>extra_trees</td><td>cpu</td><td>0.784629</td><td>0.562101</td><td>0.636864</td><td>15.601243</td><td>0.192284</td><td>0.073178</td></tr><tr><td>soft_ensemble</td><td>mixed</td><td>0.829873</td><td>0.565158</td><td>0.675282</td><td>8.347985</td><td>0.168358</td><td>0.033006</td></tr></tbody></table>
+<h2>시간 피처 제거 비교</h2><table><thead><tr><th>모델</th><th>시간 제거 AUCPR</th><th>시간 제거 recall</th><th>시간 제거 시간당 오탐</th><th>시간 제거 ECE</th></tr></thead><tbody><tr><td>xgboost</td><td>0.835854</td><td>0.589195</td><td>8.845335</td><td>0.033089</td></tr><tr><td>lightgbm</td><td>0.834864</td><td>0.589448</td><td>8.567486</td><td>0.041299</td></tr><tr><td>extra_trees</td><td>0.783553</td><td>0.570837</td><td>16.401449</td><td>0.074609</td></tr><tr><td>soft_ensemble</td><td>0.834176</td><td>0.588978</td><td>8.914797</td><td>0.046044</td></tr></tbody></table>
+<p>시간 피처를 제거했을 때 AUCPR와 recall이 증가한 모델은 시간 shortcut에
+덜 의존한 것으로 해석할 수 있습니다.
+이는 인과성이나 의료적 의미를 증명하지 않습니다.</p>
+<h2>사람별 파생변수 permutation 감사</h2><table><thead><tr><th>모델</th><th>피처 그룹</th><th>평균 AUCPR drop</th><th>양수 사람 비율</th><th>반복 양수 비율</th><th>반복 통과</th></tr></thead><tbody><tr><td>extra_trees</td><td>context</td><td>0.000270</td><td>0.166667</td><td>0.518519</td><td>아니오</td></tr><tr><td>extra_trees</td><td>derived_signal</td><td>0.327759</td><td>1.000000</td><td>1.000000</td><td>예</td></tr><tr><td>extra_trees</td><td>time</td><td>0.000709</td><td>0.666667</td><td>0.759259</td><td>아니오</td></tr><tr><td>lightgbm</td><td>context</td><td>0.001363</td><td>0.666667</td><td>0.685185</td><td>아니오</td></tr><tr><td>lightgbm</td><td>derived_signal</td><td>0.366647</td><td>1.000000</td><td>1.000000</td><td>예</td></tr><tr><td>lightgbm</td><td>time</td><td>0.005299</td><td>0.500000</td><td>0.611111</td><td>아니오</td></tr><tr><td>xgboost</td><td>context</td><td>0.001698</td><td>0.333333</td><td>0.666667</td><td>아니오</td></tr><tr><td>xgboost</td><td>derived_signal</td><td>0.365198</td><td>1.000000</td><td>1.000000</td><td>예</td></tr><tr><td>xgboost</td><td>time</td><td>0.002544</td><td>0.500000</td><td>0.611111</td><td>아니오</td></tr></tbody></table>
+<p>세 모델 모두 derived_signal 그룹은 6명 전원에서 반복적으로 양의 성능 감소를 보였습니다.
+따라서 합성 기준의 핵심 근거는 파생변수 그룹이며, 단일 피처 중요도만으로
+최종 모델을 결정하지 않습니다.</p>
+<h2>그래프</h2><div class="charts"><img src="tree_model_gpu_kaggle_ko_metrics.png" alt="한글 모델 비교 그래프"><img src="tree_model_gpu_kaggle_ko_importance.png" alt="한글 모델 비교 그래프"><img src="tree_model_gpu_kaggle_ko_stability.png" alt="한글 모델 비교 그래프"><img src="tree_model_gpu_kaggle_ko_ablation.png" alt="한글 모델 비교 그래프"><img src="tree_model_gpu_kaggle_ko_permutation.png" alt="한글 모델 비교 그래프"></div>
+<h2>선택 기록</h2><p>게이트 통과 앵커 후보:
+<b>lightgbm</b>.
+이번 결과에서는 LightGBM이 AUCPR·F1·시간당 오탐의 균형이 가장 좋았지만,
+실제 운영 승격은 라벨·동기화·개인별 검증 뒤에 수동으로 결정해야 합니다.</p>
+</body></html>

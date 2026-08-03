@@ -25,10 +25,16 @@ class TreeProbabilityModel(Protocol):
     def predict_proba(self, features: object) -> Any: ...
 
 
-TREE_MODEL_IDS: Final[tuple[str, str]] = ("xgboost", "lightgbm")
+GPU_TREE_MODEL_IDS: Final[tuple[str, str]] = ("xgboost", "lightgbm")
+TREE_MODEL_IDS: Final[tuple[str, str, str]] = (
+    "xgboost",
+    "lightgbm",
+    "extra_trees",
+)
 TREE_MODEL_LABELS_KO: Final[dict[str, str]] = {
     "xgboost": "XGBoost",
     "lightgbm": "LightGBM",
+    "extra_trees": "ExtraTrees",
     "soft_ensemble": "소프트 앙상블",
 }
 
@@ -64,11 +70,30 @@ class TreeBenchmarkConfig:
     colsample_bytree: float = 0.8
     n_jobs: int = 1
     threshold: float = 0.5
+    include_extra_trees: bool = False
+    extra_trees_n_estimators: int = 64
+    use_gpu: bool = False
+    gpu_required: bool = False
+    gpu_device: str = "cuda"
     time_ablation_aucpr_relative_drop_limit: float = 0.05
     time_ablation_event_recall_absolute_drop_limit: float = 0.05
     min_positive_person_fraction: float = 0.80
     min_repeat_positive_rate: float = 0.67
     permutation_repeats: int = 3
+
+    def validate(self) -> None:
+        """Reject an ambiguous GPU request before fitting any candidate."""
+
+        if self.seed_count < 1:
+            raise ValueError("seed_count must be positive")
+        if self.n_estimators < 1:
+            raise ValueError("n_estimators must be positive")
+        if self.extra_trees_n_estimators < 1:
+            raise ValueError("extra_trees_n_estimators must be positive")
+        if self.gpu_required and not self.use_gpu:
+            raise ValueError("gpu_required cannot be enabled when use_gpu is false")
+        if self.use_gpu and not self.gpu_device.strip():
+            raise ValueError("gpu_device must be non-empty when use_gpu is enabled")
 
 
 DEFAULT_TREE_BENCHMARK_CONFIG: Final[TreeBenchmarkConfig] = TreeBenchmarkConfig()
@@ -594,7 +619,9 @@ def build_tree_candidates(
     *,
     seed: int,
 ) -> dict[str, TreeProbabilityModel]:
-    """Build XGBoost and LightGBM lazily, so core inference stays dependency-light."""
+    """Build GPU-capable boosters and an optional CPU ExtraTrees candidate."""
+
+    config.validate()
 
     try:
         from lightgbm import LGBMClassifier
@@ -604,36 +631,63 @@ def build_tree_candidates(
             "tree challengers require the optional dependency group: "
             "uv sync --extra tree-benchmark"
         ) from error
-    xgb = XGBClassifier(
-        objective="binary:logistic",
-        eval_metric="logloss",
-        tree_method="hist",
-        n_estimators=config.n_estimators,
-        max_depth=config.max_depth,
-        learning_rate=config.learning_rate,
-        subsample=config.subsample,
-        colsample_bytree=config.colsample_bytree,
-        min_child_weight=5,
-        n_jobs=config.n_jobs,
-        random_state=seed,
-        verbosity=0,
-    )
-    lgbm = LGBMClassifier(
-        objective="binary",
-        n_estimators=config.n_estimators,
-        num_leaves=config.num_leaves,
-        learning_rate=config.learning_rate,
-        subsample=config.subsample,
-        colsample_bytree=config.colsample_bytree,
-        min_child_samples=config.min_child_samples,
-        n_jobs=config.n_jobs,
-        random_state=seed,
-        verbosity=-1,
-    )
-    return {
+    xgb_parameters: dict[str, object] = {
+        "objective": "binary:logistic",
+        "eval_metric": "logloss",
+        "tree_method": "hist",
+        "n_estimators": config.n_estimators,
+        "max_depth": config.max_depth,
+        "learning_rate": config.learning_rate,
+        "subsample": config.subsample,
+        "colsample_bytree": config.colsample_bytree,
+        "min_child_weight": 5,
+        "n_jobs": config.n_jobs,
+        "random_state": seed,
+        "verbosity": 0,
+    }
+    if config.use_gpu:
+        # XGBoost 2+ uses ``device`` with hist; a successful fit is the GPU
+        # execution proof.  We deliberately do not fall back to CPU here.
+        xgb_parameters["device"] = config.gpu_device
+    xgb = XGBClassifier(**xgb_parameters)
+    lgbm_parameters: dict[str, Any] = {
+        "objective": "binary",
+        "n_estimators": config.n_estimators,
+        "num_leaves": config.num_leaves,
+        "learning_rate": config.learning_rate,
+        "subsample": config.subsample,
+        "colsample_bytree": config.colsample_bytree,
+        "min_child_samples": config.min_child_samples,
+        "n_jobs": config.n_jobs,
+        "random_state": seed,
+        "verbosity": -1,
+    }
+    if config.use_gpu:
+        # LightGBM requires a GPU-enabled build.  If the wheel lacks it, the
+        # required GPU run fails loudly instead of silently using CPU.
+        lgbm_parameters["device_type"] = "gpu"
+    lgbm = LGBMClassifier(**lgbm_parameters)
+    candidates: dict[str, TreeProbabilityModel] = {
         "xgboost": cast(TreeProbabilityModel, xgb),
         "lightgbm": cast(TreeProbabilityModel, lgbm),
     }
+    if config.include_extra_trees:
+        try:
+            from sklearn.ensemble import ExtraTreesClassifier
+        except ImportError as error:  # pragma: no cover - core dependency guard
+            raise RuntimeError("ExtraTrees requires scikit-learn") from error
+        candidates["extra_trees"] = cast(
+            TreeProbabilityModel,
+            ExtraTreesClassifier(
+                n_estimators=config.extra_trees_n_estimators,
+                max_depth=config.max_depth,
+                max_features=config.colsample_bytree,
+                class_weight="balanced",
+                n_jobs=config.n_jobs,
+                random_state=seed,
+            ),
+        )
+    return candidates
 
 
 def expected_calibration_error(
@@ -781,10 +835,14 @@ def fit_tree_challengers(
     validation_timestamps: Sequence[object] | None = None,
     validation_groups: Sequence[object] | None = None,
 ) -> TreeBenchmarkResult:
-    """Fit two challengers across deterministic seeds and add a soft ensemble."""
+    """Fit the configured challengers across seeds and add a soft ensemble.
 
-    if config.seed_count < 1:
-        raise ValueError("seed_count must be positive")
+    ``use_gpu`` applies only to XGBoost and LightGBM.  ExtraTrees is kept as a
+    deliberately labelled CPU reference because scikit-learn ExtraTrees has
+    no CUDA implementation.
+    """
+
+    config.validate()
     if list(train_features.columns) != list(validation_features.columns):
         raise ValueError("train and validation feature schemas must match exactly")
     feature_names = list(train_features.columns)
@@ -792,16 +850,17 @@ def fit_tree_challengers(
     y_validation = np.asarray(validation_target, dtype="int8")
     if len(y_train) != len(train_features) or len(y_validation) != len(validation_features):
         raise ValueError("features and targets must align")
-    probability_by_model: dict[str, list[np.ndarray]] = {
-        model_id: [] for model_id in TREE_MODEL_IDS
-    }
-    fitted_models: dict[str, list[TreeProbabilityModel]] = {
-        model_id: [] for model_id in TREE_MODEL_IDS
-    }
+    probability_by_model: dict[str, list[np.ndarray]] = {}
+    fitted_models: dict[str, list[TreeProbabilityModel]] = {}
     importance_parts: list[pd.DataFrame] = []
     for seed_offset in range(config.seed_count):
         seed = config.random_state + seed_offset
         candidates = build_tree_candidates(config, seed=seed)
+        if not probability_by_model:
+            probability_by_model = {model_id: [] for model_id in candidates}
+            fitted_models = {model_id: [] for model_id in candidates}
+        if set(candidates) != set(probability_by_model):
+            raise RuntimeError("candidate model set changed across deterministic seeds")
         for model_id, model in candidates.items():
             model.fit(train_features, y_train)
             fitted_models[model_id].append(model)
@@ -831,6 +890,13 @@ def fit_tree_challengers(
         row: dict[str, object] = {
             "model_id": model_id,
             "model_label_ko": TREE_MODEL_LABELS_KO[model_id],
+            "execution_device": (
+                config.gpu_device
+                if config.use_gpu and model_id in GPU_TREE_MODEL_IDS
+                else "cpu"
+            ),
+            "gpu_requested": bool(config.use_gpu and model_id in GPU_TREE_MODEL_IDS),
+            "gpu_required": bool(config.gpu_required and model_id in GPU_TREE_MODEL_IDS),
         }
         row.update(
             evaluate_tree_predictions(
@@ -855,6 +921,13 @@ def fit_tree_challengers(
     ensemble_row: dict[str, object] = {
         "model_id": "soft_ensemble",
         "model_label_ko": TREE_MODEL_LABELS_KO["soft_ensemble"],
+        "execution_device": (
+            "mixed"
+            if config.use_gpu and "extra_trees" in probability_by_model
+            else config.gpu_device if config.use_gpu else "cpu"
+        ),
+        "gpu_requested": bool(config.use_gpu),
+        "gpu_required": bool(config.gpu_required),
     }
     ensemble_row.update(
         evaluate_tree_predictions(

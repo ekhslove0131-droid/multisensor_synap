@@ -1,5 +1,8 @@
 # 트리 모델 비교·피처 중요도 감사 보고서
 
+> 이 문서는 GPU 실행 전의 XGBoost·LightGBM CPU 기준선 스냅샷이다. 최신 ExtraTrees·GPU
+> 결과는 [GPU 트리 모델 비교 보고서](TREE_MODEL_GPU_BENCHMARK_KO.md)를 기준으로 본다.
+
 ## 결론
 
 이번 단계의 핵심은 “피처 중요도가 큰 모델”을 고르는 것이 아니라, 우리가 만든
@@ -41,7 +44,7 @@ ablation, AUCPR·event recall·F1·false alerts/hour·Brier·ECE를 함께 저�
 - 도전자: XGBoost, LightGBM; 각 3개 결정적 seed, 160개 트리, `n_jobs=1`
 - 앙상블: 두 도전자의 validation 확률 단순 평균
 - 도전자 비교 임계값: 0.5; locked test는 읽지 않음
-- ExtraTrees: 실행하지 않고 마지막 후보로 보류
+- 이 기준선 실행에서는 ExtraTrees를 실행하지 않고 마지막 후보로 보류
 - 실제 센서·실제 행동 정확도: `NOT VERIFIED`
 - 그래프: 코드에서 설치된 `NanumGothic-Regular.ttf`를 등록해 한글로 생성
 
@@ -130,10 +133,10 @@ PYTHONPATH=src .venv/bin/python scripts/run_tree_model_benchmark.py \
 - `tree_model_benchmark_ko.permutation_summary.parquet`
 - `_metrics.png`, `_importance.png`, `_stability.png`, `_ablation.png`, `_permutation.png`
 
-캐글 재현용 코드는 [09_tree_model_benchmark.ipynb](../kaggle/09_tree_model_benchmark.ipynb)에
-있다. `RUN_LOCKED_TEST=False`, `USE_GPU=False`, `N_JOBS=1`이며, prepared manifest·새
-wheel·NanumGothic 폰트를 입력 Dataset으로 연결해야 한다. 이번 변경에서는 캐글
-커널을 새로 시작하거나 업로드하지 않았다.
+이 문서는 CPU 기준선 스냅샷이다. 최신 노트북은 [09_tree_model_benchmark.ipynb](../kaggle/09_tree_model_benchmark.ipynb)에
+있으며 `RUN_LOCKED_TEST=False`, `USE_GPU=True`, `GPU_REQUIRED=True`, `N_JOBS=1`이다.
+prepared manifest·새 wheel·NanumGothic 폰트를 입력 Dataset으로 연결하며, 최신 결과는
+[GPU 보고서](TREE_MODEL_GPU_BENCHMARK_KO.md)에 기록했다.
 
 ## 다음 단계
 

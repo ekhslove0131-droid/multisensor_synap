@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>실제 데이터 shadow 준비 점검</title>
+<style>body{font-family:NanumGothic,'Apple SD Gothic Neo',sans-serif;margin:2rem;color:#172033}
+.blocked{background:#fff1f2;border-left:4px solid #e15759;padding:1rem}
+table{border-collapse:collapse;width:100%;max-width:760px}
+th,td{border:1px solid #d9dee8;padding:.5rem;text-align:left}
+</style></head><body>
+<h1>최종 모델 실제 데이터 Shadow 준비 점검</h1>
+<div class="blocked">상태: <b>BLOCKED_NOT_MODEL_READY</b> · 정확도: <b>NOT VERIFIED</b>
+· prediction 실행: <b>False</b></div>
+<p>이 문서는 Neon 관측 데이터가 실제 모델 입력·라벨 계약을 만족하는지 확인합니다.
+결측 계약을 임의로 보정하거나 synthetic truth를 실제 라벨로 사용하지 않았습니다.</p>
+<table><tr><th>항목</th><th>관찰값</th></tr>
+<tr><td>수집 행</td><td>3284</td></tr>
+<tr><td>세션</td><td>11</td></tr>
+<tr><td>corrected UTC 행</td><td>0</td></tr>
+<tr><td>단계 라벨 행</td><td>0</td></tr>
+<tr><td>모델 버전 행</td><td>0</td></tr>
+</table>
+<h2>차단 사유</h2><ul><li>MODEL_READY_FALSE</li><li>CORRECTED_UTC_MISSING</li><li>OBSERVER_STAGE_LABELS_MISSING</li><li>MODEL_VERSION_NOT_REGISTERED</li><li>REAL_DATA_NOT_VERIFIED</li></ul>
+<p>다음 안전한 조치: corrected_utc와 독립 관찰 onset/peak/recovery/end 라벨을 등록한 뒤, model-ready schema hash를 확인하고 shadow prediction을 재실행한다.</p>
+</body></html>
