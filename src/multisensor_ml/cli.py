@@ -39,6 +39,7 @@ from multisensor_ml.pipeline import (
 )
 from multisensor_ml.receipts import validate_stage_receipt
 from multisensor_ml.registry_workflow import (
+    RegistryRunResult,
     export_registry_knime_tables,
     run_registry_all,
     run_registry_stage,
@@ -165,6 +166,21 @@ def build_parser() -> argparse.ArgumentParser:
     run_all = subparsers.add_parser("run-all")
     run_all.add_argument("--config", type=Path, required=True)
 
+    onnx = subparsers.add_parser("onnx")
+    onnx_commands = onnx.add_subparsers(dest="onnx_command", required=True)
+    onnx_tune = onnx_commands.add_parser("tune")
+    onnx_tune.add_argument("--project-root", type=Path, required=True)
+    onnx_tune.add_argument("--series", default="mvp3-oracle-v1")
+    onnx_tune.add_argument(
+        "--output",
+        type=Path,
+        default=Path("services/onnx_api/models/goal15-final-v1"),
+    )
+    onnx_tune.add_argument("--trials", type=int, default=12)
+    onnx_tune.add_argument("--max-train-rows", type=int, default=600_000)
+    onnx_tune.add_argument("--max-validation-rows", type=int, default=120_000)
+    onnx_tune.add_argument("--seed", type=int, default=20260725)
+
     kaggle_model = subparsers.add_parser("kaggle-model")
     kaggle_model_commands = kaggle_model.add_subparsers(
         dest="kaggle_model_command", required=True
@@ -234,6 +250,34 @@ def _emit(**payload: object) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "onnx":
+        if args.onnx_command != "tune":
+            raise AssertionError(f"unhandled ONNX command: {args.onnx_command}")
+        from multisensor_ml.optuna_dual_sensor import (
+            DualSensorTuningConfig,
+            tune_dual_sensor_models,
+        )
+
+        tuning_config = DualSensorTuningConfig(
+            project_root=args.project_root,
+            series_id=args.series,
+            output_root=args.output,
+            n_trials=args.trials,
+            max_train_rows=args.max_train_rows,
+            max_validation_rows=args.max_validation_rows,
+            seed=args.seed,
+        )
+        result = tune_dual_sensor_models(tuning_config)
+        _emit(
+            status=result["status"],
+            output=str(args.output.resolve()),
+            variants=list(cast(list[object], result["variants"])),
+            primary_metric=result["primary_metric"],
+            data_status=result["model_scope"],
+            real_data_status=result["real_data_status"],
+            locked_test_read=result["locked_test_read"],
+        )
+        return 0
     if args.command == "kaggle-model":
         if args.kaggle_model_command == "package":
             config = load_kaggle_model_package_config(args.config)
@@ -458,14 +502,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.registry_command == "run-all":
             registry_config = load_training_registry_config(args.config)
-            result = run_registry_all(registry_config)
+            registry_result: RegistryRunResult = run_registry_all(registry_config)
             _emit(
-                status=result.status,
+                status=registry_result.status,
                 real_data_status="NOT VERIFIED",
-                run_id=result.run_id,
-                series_id=result.series_id,
-                release_id=result.release_id,
-                final_receipt=str(result.final_receipt.resolve()),
+                run_id=registry_result.run_id,
+                series_id=registry_result.series_id,
+                release_id=registry_result.release_id,
+                final_receipt=str(registry_result.final_receipt.resolve()),
             )
             return 0
         if args.registry_command == "compare":

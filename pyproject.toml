@@ -28,6 +28,17 @@ tree-benchmark = [
     "matplotlib>=3.9,<4",
     "xgboost>=2.1,<4",
 ]
+onnx-serving = [
+    "onnx>=1.18,<2",
+    "onnxmltools>=1.13,<2",
+    "onnxruntime>=1.20,<2",
+    "optuna>=4.4,<5",
+    "skl2onnx>=1.19,<2",
+]
+cloud-run = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.34,<1",
+]
 
 [dependency-groups]
 dev = [

@@ -17,6 +17,7 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
         "availability-model",
         "neon-adapter",
         "materialize-synthetic",
+        "onnx",
         "phase3",
         "prepare",
         "registry",

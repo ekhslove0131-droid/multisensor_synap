@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>최종 Optuna ONNX 후보 보고서</title>
+  <style>
+    :root{color-scheme:light}body{font-family:NanumGothic,"Apple SD Gothic Neo",sans-serif;max-width:960px;margin:0 auto;padding:24px;color:#172033;line-height:1.55}
+    .status{padding:12px 16px;border-left:5px solid #2563eb;background:#eff6ff}.warn{padding:12px 16px;border-left:5px solid #d97706;background:#fffbeb}
+    table{border-collapse:collapse;width:100%;margin:12px 0 20px}th,td{border:1px solid #d6dbe5;padding:8px;text-align:right}th:first-child,td:first-child{text-align:left}h1{margin-bottom:4px}small{color:#566176}
+  </style>
+</head>
+<body>
+  <h1>최종 Optuna·ONNX 후보</h1>
+  <small>mvp3-oracle-v1 · seed 20260725 · 12 trials/후보 · train 24명 / validation 6명</small>
+  <p class="status"><b>상태: READY_FOR_SYNTHETIC_SHADOW</b><br>두 ONNX bundle을 생성하고 해시·CPU 재로딩을 확인했다.</p>
+  <table>
+    <thead><tr><th>후보</th><th>피처</th><th>AUCPR</th><th>Recall</th><th>F1</th><th>False alerts/h</th><th>Brier</th><th>ECE</th></tr></thead>
+    <tbody>
+      <tr><td>Galaxy Watch</td><td>127</td><td>0.8074</td><td>0.4050</td><td>0.5670</td><td>1.813</td><td>0.2191</td><td>0.1925</td></tr>
+      <tr><td>Galaxy Watch + H10</td><td>146</td><td><b>0.8345</b></td><td><b>0.4953</b></td><td><b>0.6451</b></td><td>3.089</td><td><b>0.1774</b></td><td><b>0.1083</b></td></tr>
+    </tbody>
+  </table>
+  <h2>해석</h2>
+  <p>H10 추가 후보가 AUCPR·recall·F1·보정은 개선했지만 false alerts/hour가 늘었다.
+  실제 운영 threshold는 관찰자 라벨이 생긴 뒤 validation에서 선택한다.</p>
+  <div class="warn"><b>중요:</b> 현재 입력은 latent synthetic proxy이며 실제 Galaxy Watch/H10 신호가 아니다.
+  Neon의 model-ready와 실제 정확도는 <b>NOT VERIFIED</b>다. Cloud Run 배포는 수행하지 않았다.</div>
+  <h2>파일</h2>
+  <p><code>services/onnx_api/models/goal15-final-v1/</code> 아래에 두 모델과 manifest,
+  Optuna trial 기록이 있으며 상위 manifest에 파일 SHA-256이 기록되어 있다.</p>
+</body>
+</html>
