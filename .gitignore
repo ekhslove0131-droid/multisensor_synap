@@ -10,6 +10,7 @@ __pycache__/
 *.py[cod]
 data/raw/
 data/prepared/
+data/model_ready/
 data/registry/
 data/audit/
 data/outcomes/

@@ -1,0 +1,19 @@
+schema_version: goal1.5/config/v1
+series_id: standard-pattern-v2-quick
+experiment_id: standard-pattern-v2-quick
+generator_config: ../../multisensor_synth/configs/quick.yaml
+seeds: [20260803, 20260804, 20260805]
+generator_overrides:
+  run:
+    duration_sec: 7200
+    duration_days: null
+    participant_count: 12
+  events:
+    target_events_per_day:
+      distribution: discrete_uniform
+      min: 1
+      max: 1
+data_root: ../data
+artifact_root: ../artifacts
+random_state: 20260803
+locked_test_audit_reason: Standard 30 minute forecast and virtual pattern v2 validation

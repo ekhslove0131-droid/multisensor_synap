@@ -21,6 +21,10 @@ from multisensor_ml.kaggle_reproduce import (
 from multisensor_ml.knime import export_knime_artifacts
 from multisensor_ml.materialize import materialize_synthetic
 from multisensor_ml.model_registry import ModelRegistry, import_oracle_bundle
+from multisensor_ml.monitoring_v2 import (
+    load_monitoring_v2_config,
+    run_monitoring_v2,
+)
 from multisensor_ml.neon_adapter import (
     derive_watch_features,
     fit_personal_baseline_adapter,
@@ -181,6 +185,13 @@ def build_parser() -> argparse.ArgumentParser:
     onnx_tune.add_argument("--max-validation-rows", type=int, default=120_000)
     onnx_tune.add_argument("--seed", type=int, default=20260725)
 
+    monitoring_v2 = subparsers.add_parser("monitor-v2")
+    monitoring_v2_commands = monitoring_v2.add_subparsers(
+        dest="monitoring_v2_command", required=True
+    )
+    monitoring_v2_run = monitoring_v2_commands.add_parser("run")
+    monitoring_v2_run.add_argument("--config", type=Path, required=True)
+
     kaggle_model = subparsers.add_parser("kaggle-model")
     kaggle_model_commands = kaggle_model.add_subparsers(
         dest="kaggle_model_command", required=True
@@ -276,6 +287,23 @@ def main(argv: list[str] | None = None) -> int:
             data_status=result["model_scope"],
             real_data_status=result["real_data_status"],
             locked_test_read=result["locked_test_read"],
+        )
+        return 0
+
+    if args.command == "monitor-v2":
+        if args.monitoring_v2_command != "run":
+            raise AssertionError(f"unhandled monitoring-v2 command: {args.monitoring_v2_command}")
+        monitoring_config = load_monitoring_v2_config(args.config)
+        monitoring_result = run_monitoring_v2(monitoring_config)
+        _emit(
+            status="TRAINED",
+            dataset_root=str(monitoring_result.dataset_root),
+            artifact_root=str(monitoring_result.artifact_root),
+            bundles=[str(path) for path in monitoring_result.bundles],
+            report_json=str(monitoring_result.report_json),
+            data_status="oracle/sanity",
+            real_data_status="NOT VERIFIED",
+            locked_test_read=False,
         )
         return 0
     if args.command == "kaggle-model":

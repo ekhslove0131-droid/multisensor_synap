@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV MODEL_ROOT_V2=/app/models/goal15-monitor-v2
+
+COPY services/onnx_api/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY src/multisensor_ml/__init__.py /app/multisensor_ml/__init__.py
+COPY src/multisensor_ml/monitoring_v2.py /app/multisensor_ml/monitoring_v2.py
+COPY src/multisensor_ml/monitoring_v2_onnx.py /app/multisensor_ml/monitoring_v2_onnx.py
+COPY src/multisensor_ml/cloud_run_monitoring_v2.py /app/multisensor_ml/cloud_run_monitoring_v2.py
+COPY services/onnx_api/app_v2.py /app/app_v2.py
+COPY services/onnx_api/models/goal15-monitor-v2 /app/models/goal15-monitor-v2
+
+CMD ["uvicorn", "app_v2:app", "--host", "0.0.0.0", "--port", "8080"]

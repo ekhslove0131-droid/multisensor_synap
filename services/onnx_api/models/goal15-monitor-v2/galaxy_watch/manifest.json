@@ -1,0 +1,144 @@
+{
+  "bundle_id": "monitoring-v2-standard-pattern-v2-quick-galaxy_watch",
+  "bundle_kind": "standard_30m_plus_virtual_patterns",
+  "dataset_id": "standard-pattern-v2-quick-model-ready-v2",
+  "feature_names": [
+    "watch_eda_z",
+    "watch_hr_z",
+    "watch_motion_z",
+    "watch_load",
+    "watch_load_cum_1800",
+    "watch_load_cum_21600",
+    "watch_eda_mean_30",
+    "watch_hr_mean_30",
+    "watch_motion_mean_30",
+    "watch_eda_slope_60",
+    "watch_hr_slope_60",
+    "watch_motion_slope_60",
+    "watch_load_std_60",
+    "context_index",
+    "is_awake",
+    "quality_watch"
+  ],
+  "locked_test_read": false,
+  "model_scope": "oracle/sanity",
+  "model_sha256": {
+    "pattern_meltdown_like.onnx": "eaf46274c44a7b88490c101f3ac219aab3ad252ff2f7d68e40600bcbae844130",
+    "pattern_sensory_seeking_like.onnx": "e46c0cb457330be2a1c66072a377761ecfd218b9ceeae12ad73c74e3970ec2fb",
+    "pattern_shutdown_like.onnx": "1455121e8dedb93986be1a90e9050c78611ce835ae931e94e266451f4f56196b",
+    "pattern_stereotypy_like.onnx": "39104b2c384f5f2c026ab1a720b3ce44dc7a4e76bea12841fb1601b9335a34c8",
+    "pattern_tantrum_like.onnx": "3adc7a3a7f837c0be6ed651385d66ac264b18ead223b300c86b1e58114a48431",
+    "standard_30m.onnx": "7364e71d7b5d38a2610949de05c41c7ec8da5b2b0f8828b32c95b8a0b4c410f0"
+  },
+  "model_version": "v2.0.0-oracle-sanity",
+  "pattern_codes": [
+    "meltdown_like",
+    "tantrum_like",
+    "sensory_seeking_like",
+    "stereotypy_like",
+    "shutdown_like"
+  ],
+  "pattern_feature_names": [
+    "watch_eda_z",
+    "watch_hr_z",
+    "watch_motion_z",
+    "watch_load",
+    "watch_load_cum_1800",
+    "watch_load_cum_21600",
+    "watch_eda_mean_30",
+    "watch_hr_mean_30",
+    "watch_motion_mean_30",
+    "watch_eda_slope_60",
+    "watch_hr_slope_60",
+    "watch_motion_slope_60",
+    "watch_load_std_60",
+    "context_index",
+    "is_awake",
+    "quality_watch",
+    "standard_forecast",
+    "standard_residual"
+  ],
+  "pattern_metrics": {
+    "meltdown_like": {
+      "aucpr": 0.289952027636438,
+      "brier": 0.06446415774154358,
+      "event_f1": 0.3236981465136805,
+      "event_recall": 0.4864058355437666,
+      "false_alerts_per_hour": 381.75,
+      "positive_rows": 3016.0,
+      "status": "CANDIDATE",
+      "threshold": 0.07720075051125397
+    },
+    "sensory_seeking_like": {
+      "aucpr": 0.18320008426438675,
+      "brier": 0.12413999326877156,
+      "event_f1": 0.29685899624445206,
+      "event_recall": 0.5653446033810143,
+      "false_alerts_per_hour": 575.0833333333334,
+      "positive_rows": 3076.0,
+      "status": "CANDIDATE",
+      "threshold": 0.4163331919927995
+    },
+    "shutdown_like": {
+      "aucpr": 0.08710360041974705,
+      "brier": 0.09206241001933228,
+      "event_f1": 0.15137358452241914,
+      "event_recall": 0.9622336991607489,
+      "false_alerts_per_hour": 2775.5833333333335,
+      "positive_rows": 3098.0,
+      "status": "CANDIDATE",
+      "threshold": 0.0005495901260390208
+    },
+    "stereotypy_like": {
+      "aucpr": 0.29071001185991724,
+      "brier": 0.04470260361861751,
+      "event_f1": 0.3628076572470374,
+      "event_recall": 0.44320712694877507,
+      "false_alerts_per_hour": 149.66666666666666,
+      "positive_rows": 1796.0,
+      "status": "CANDIDATE",
+      "threshold": 0.4285414619810598
+    },
+    "tantrum_like": {
+      "aucpr": 0.049098953849502275,
+      "brier": 0.08402456668603572,
+      "event_f1": 0.11752513670841418,
+      "event_recall": 0.8836206896551724,
+      "false_alerts_per_hour": 3305.9166666666665,
+      "positive_rows": 3016.0,
+      "status": "CANDIDATE",
+      "threshold": 0.0001151162817012138
+    }
+  },
+  "pattern_model_paths": {
+    "meltdown_like": "pattern_meltdown_like.onnx",
+    "sensory_seeking_like": "pattern_sensory_seeking_like.onnx",
+    "shutdown_like": "pattern_shutdown_like.onnx",
+    "stereotypy_like": "pattern_stereotypy_like.onnx",
+    "tantrum_like": "pattern_tantrum_like.onnx"
+  },
+  "real_data_status": "NOT VERIFIED",
+  "schema_version": "goal1.5/monitoring-onnx-bundle/v1",
+  "split_contract": {
+    "locked_test_people": 6,
+    "train_people": 24,
+    "validation_people": 6
+  },
+  "standard_horizon_sec": 1800,
+  "standard_metrics": {
+    "mae": 0.12820674468457524,
+    "normal_rows": 19157.0,
+    "persistence_mae": 0.30909485057396835,
+    "rmse": 0.17349396391573627
+  },
+  "standard_model_path": "standard_30m.onnx",
+  "standard_target": "next_30m_normal_watch_load_mean",
+  "thresholds": {
+    "meltdown_like": 0.07720075051125397,
+    "sensory_seeking_like": 0.4163331919927995,
+    "shutdown_like": 0.0005495901260390208,
+    "stereotypy_like": 0.4285414619810598,
+    "tantrum_like": 0.0001151162817012138
+  },
+  "variant": "galaxy_watch"
+}

@@ -30,6 +30,16 @@ uv run multisensor-ml run-all --config configs/goal15_quick.yaml
 uv run multisensor-ml run-all --config configs/goal15_mvp3.yaml
 ```
 
+표준선 30분 예측과 가상 패턴 ONNX v2를 재현하려면:
+
+```bash
+./scripts/build_monitoring_v2.sh
+```
+
+이 명령은 3 seed 합성 truth를 만들고 24/6/6 사람 split의 model-ready
+관측·파생변수를 생성한 뒤 `galaxy_watch`, `galaxy_watch_h10` 두 bundle을
+학습합니다. 결과는 `oracle/sanity`이며 실제 Neon 정확도는 `NOT VERIFIED`입니다.
+
 MVP 최초 실측은 generation 약 1분, feature prepare 약 4분,
 전체 validation stress 포함 학습 약 239분이었습니다. 반복 실험에서는 quick로
 후보를 좁힌 뒤 full stress를 실행하는 편이 합리적입니다.
@@ -43,6 +53,7 @@ multisensor-ml train --experiment <yaml>
 multisensor-ml evaluate --bundle <dir> --dataset <id> --role validation|locked_test
 multisensor-ml export-knime --experiment <id>
 multisensor-ml run-all --config <yaml>
+multisensor-ml monitor-v2 run --config <yaml>
 multisensor-ml factory run --config <yaml> --output-receipt <json>
 multisensor-ml factory validate --receipt <json>
 multisensor-ml registry init --config <yaml>

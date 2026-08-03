@@ -17,6 +17,7 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
         "availability-model",
         "neon-adapter",
         "materialize-synthetic",
+        "monitor-v2",
         "onnx",
         "phase3",
         "prepare",
@@ -68,6 +69,11 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
     )
     assert registry.registry_command == "run-stage"
     assert registry.stage == "stage-model"
+
+    monitoring = parser.parse_args(
+        ["monitor-v2", "run", "--config", "configs/monitoring_v2_quick.yaml"]
+    )
+    assert monitoring.monitoring_v2_command == "run"
 
 
 def test_kaggle_model_commands_parse() -> None:
