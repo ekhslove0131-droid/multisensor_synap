@@ -63,3 +63,27 @@ Watch ECG는 calibration-only다. ECG–PPG 생리적 lag는 clock error와 별�
 필드로 보존한다. 공개 계약은
 `schemas/synchronization.schema.json`이며, oracle에서는 모든 측정값을
 비우고 `NOT_AVAILABLE_TRUTH_ONLY`로 기록한다.
+
+## Kidsignal 운영 모델 플랫폼 경계
+
+Goal 1.5 Oracle 아키텍처는 운영 실데이터 모델과 분리한다. 운영 모델 계약의
+canonical 저장소는 이 저장소(`multisensor_ml`)이며, `multisensor_synth`는 계속
+합성 truth 생성기로만 사용한다.
+
+- Android/Watch/H10: raw, vendor observation, capture metadata 수집
+- GCS: raw 및 committed artifact canonical lake
+- BigQuery: 장기 projection과 UUID/digest로 동결한 training cohort
+- 모델/Kaggle: 동결 cohort로 reference/candidate 학습 및 immutable bundle 생성
+- Cloud Run: corrected time, quality, baseline, feature, ACTIVE/CANDIDATE 추론
+- DuckDB `:memory:`: 즉시 흐름·품질·지연 관찰만 수행
+- Neon: migration-only legacy
+
+Watch-only, H10-only, Watch+H10은 서로 다른 feature schema와 모델이다. 필수 source
+누락을 생체값 0/null로 대체하지 않는다. stage 1~5는 시간 순서이며 severity ordinal이
+아니다. 독립 review가 완료되지 않은 변화나 novel pattern은 false positive로 계산하지
+않는다. 상세 계약은 `docs/KIDSIGNAL_MODEL_PLATFORM_CONTRACT_KO.md`를 따른다.
+
+현재 Watch+H10 fused feature는 `PROPOSED/NOT VERIFIED`다. exact composition은 scheduling
+교집합과 corrected-time provenance만 수행하며 waveform alignment, offset/lag 추정,
+보간, 리샘플링은 별도 계약 전까지 금지한다. 모델 notebook에는 train+validation만
+노출하고 locked holdout은 sealed evaluator가 최종 immutable bundle로만 평가한다.

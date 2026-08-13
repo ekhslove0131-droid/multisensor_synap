@@ -85,6 +85,10 @@ module = [
   "pyarrow.*",
   "skops",
   "skops.*",
+  "skl2onnx",
+  "skl2onnx.*",
+  "onnx",
+  "onnx.*",
   "sklearn",
   "sklearn.*",
 ]

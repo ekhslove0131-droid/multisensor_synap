@@ -16,8 +16,10 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
         "kaggle-model",
         "availability-model",
         "neon-adapter",
+        "observational-standard",
         "materialize-synthetic",
         "monitor-v2",
+        "model-platform",
         "onnx",
         "phase3",
         "prepare",
@@ -74,6 +76,121 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
         ["monitor-v2", "run", "--config", "configs/monitoring_v2_quick.yaml"]
     )
     assert monitoring.monitoring_v2_command == "run"
+
+    observational = parser.parse_args(
+        [
+            "observational-standard",
+            "train",
+            "--input",
+            "observed.parquet",
+            "--output",
+            "artifact",
+            "--source-domain",
+            "real_observed",
+        ]
+    )
+    assert observational.observational_command == "train"
+    assert observational.source_domain == "real_observed"
+
+    baseline_export = parser.parse_args(
+        [
+            "observational-standard",
+            "export-baseline-shadow",
+            "--output",
+            "artifact",
+        ]
+    )
+    assert baseline_export.observational_command == "export-baseline-shadow"
+
+    baseline_verify = parser.parse_args(
+        [
+            "observational-standard",
+            "verify-baseline-shadow",
+            "--bundle",
+            "artifact",
+        ]
+    )
+    assert baseline_verify.observational_command == "verify-baseline-shadow"
+
+    candidate_export = parser.parse_args(
+        [
+            "observational-standard",
+            "export-candidate-shadow",
+            "--input",
+            "observed.parquet",
+            "--output",
+            "candidate",
+            "--active-bundle",
+            "active",
+            "--candidate",
+            "ridge",
+        ]
+    )
+    assert candidate_export.observational_command == "export-candidate-shadow"
+    assert candidate_export.candidate == "ridge"
+
+    candidate_verify = parser.parse_args(
+        [
+            "observational-standard",
+            "verify-candidate-shadow",
+            "--bundle",
+            "candidate",
+        ]
+    )
+    assert candidate_verify.observational_command == "verify-candidate-shadow"
+
+    reference_export = parser.parse_args(
+        [
+            "observational-standard",
+            "export-training-reference",
+            "--input",
+            "observed.parquet",
+            "--candidate-bundle",
+            "candidate",
+            "--output",
+            "reference",
+            "--generated-at",
+            "2026-08-06T09:00:00Z",
+        ]
+    )
+    assert reference_export.observational_command == "export-training-reference"
+
+    reference_verify = parser.parse_args(
+        [
+            "observational-standard",
+            "verify-training-reference",
+            "--bundle",
+            "reference",
+        ]
+    )
+    assert reference_verify.observational_command == "verify-training-reference"
+
+    platform_preflight = parser.parse_args(
+        [
+            "model-platform",
+            "preflight-bigquery",
+            "--output-receipt",
+            "preflight.json",
+        ]
+    )
+    assert platform_preflight.model_platform_command == "preflight-bigquery"
+    assert str(platform_preflight.output_receipt) == "preflight.json"
+
+    cohort_reader = parser.parse_args(
+        [
+            "model-platform",
+            "read-bigquery-cohort",
+            "--training-cohort-uuid",
+            "10000000-0000-4000-8000-000000000001",
+            "--output-receipt",
+            "cohort-readiness.json",
+        ]
+    )
+    assert cohort_reader.model_platform_command == "read-bigquery-cohort"
+    assert cohort_reader.training_cohort_uuid == (
+        "10000000-0000-4000-8000-000000000001"
+    )
+    assert str(cohort_reader.output_receipt) == "cohort-readiness.json"
 
 
 def test_kaggle_model_commands_parse() -> None:

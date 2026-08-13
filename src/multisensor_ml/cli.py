@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
 import pandas as pd
 
+from multisensor_ml.bigquery_training_preflight import (
+    active_gcloud_principal,
+    run_read_only_cohort_reader,
+    run_read_only_preflight,
+)
 from multisensor_ml.factory import run_synthetic_factory
 from multisensor_ml.kaggle_model_contracts import load_kaggle_model_package_config
 from multisensor_ml.kaggle_model_package import (
@@ -30,6 +36,17 @@ from multisensor_ml.neon_adapter import (
     fit_personal_baseline_adapter,
     personal_adapter_manifest,
     transform_with_personal_adapter,
+)
+from multisensor_ml.observational_reference import (
+    export_training_reference_bundle,
+    verify_training_reference_bundle,
+)
+from multisensor_ml.observational_standard import (
+    export_baseline_shadow_bundle,
+    export_candidate_shadow_bundle,
+    train_observational_standard,
+    verify_baseline_shadow_bundle,
+    verify_candidate_shadow_bundle,
 )
 from multisensor_ml.phase3_pipeline import (
     prepare_phase3_source,
@@ -238,6 +255,85 @@ def build_parser() -> argparse.ArgumentParser:
     neon_fit.add_argument("--warmup-seconds", type=int, default=1800)
     neon_fit.add_argument("--weight-cap", type=float, default=0.75)
 
+    observational = subparsers.add_parser(
+        "observational-standard",
+        help="train the separate corrected-UTC 30-minute observational standard model",
+    )
+    observational_commands = observational.add_subparsers(
+        dest="observational_command", required=True
+    )
+    observational_train = observational_commands.add_parser("train")
+    observational_train.add_argument("--input", type=Path, required=True)
+    observational_train.add_argument("--output", type=Path, required=True)
+    observational_train.add_argument(
+        "--source-domain",
+        choices=("real_observed", "synthetic_truth_oracle"),
+        required=True,
+    )
+    observational_train.add_argument("--seed", type=int, default=20260804)
+    observational_train.add_argument("--hgb-max-iter", type=int, default=120)
+    observational_train.add_argument("--overwrite", action="store_true")
+    observational_export = observational_commands.add_parser("export-baseline-shadow")
+    observational_export.add_argument("--output", type=Path, required=True)
+    observational_export.add_argument("--overwrite", action="store_true")
+    observational_verify = observational_commands.add_parser("verify-baseline-shadow")
+    observational_verify.add_argument("--bundle", type=Path, required=True)
+    observational_candidate = observational_commands.add_parser(
+        "export-candidate-shadow"
+    )
+    observational_candidate.add_argument("--input", type=Path, required=True)
+    observational_candidate.add_argument("--output", type=Path, required=True)
+    observational_candidate.add_argument("--active-bundle", type=Path)
+    observational_candidate.add_argument(
+        "--candidate",
+        choices=("ridge", "elasticnet", "hist_gradient_boosting"),
+        default="ridge",
+    )
+    observational_candidate.add_argument(
+        "--source-domain",
+        choices=("real_observed", "synthetic_truth_oracle"),
+        default="synthetic_truth_oracle",
+    )
+    observational_candidate.add_argument("--seed", type=int, default=20260806)
+    observational_candidate.add_argument("--hgb-max-iter", type=int, default=120)
+    observational_candidate_verify = observational_commands.add_parser(
+        "verify-candidate-shadow"
+    )
+    observational_candidate_verify.add_argument("--bundle", type=Path, required=True)
+    observational_reference = observational_commands.add_parser(
+        "export-training-reference"
+    )
+    observational_reference.add_argument("--input", type=Path, required=True)
+    observational_reference.add_argument(
+        "--candidate-bundle", type=Path, required=True
+    )
+    observational_reference.add_argument("--output", type=Path, required=True)
+    observational_reference.add_argument("--generated-at", required=True)
+    observational_reference_verify = observational_commands.add_parser(
+        "verify-training-reference"
+    )
+    observational_reference_verify.add_argument("--bundle", type=Path, required=True)
+
+    model_platform = subparsers.add_parser("model-platform")
+    model_platform_commands = model_platform.add_subparsers(
+        dest="model_platform_command", required=True
+    )
+    model_platform_preflight = model_platform_commands.add_parser(
+        "preflight-bigquery"
+    )
+    model_platform_preflight.add_argument(
+        "--output-receipt", type=Path, required=True
+    )
+    model_platform_preflight.add_argument("--observed-at-utc")
+    model_platform_cohort = model_platform_commands.add_parser(
+        "read-bigquery-cohort"
+    )
+    model_platform_cohort.add_argument("--training-cohort-uuid", required=True)
+    model_platform_cohort.add_argument(
+        "--output-receipt", type=Path, required=True
+    )
+    model_platform_cohort.add_argument("--observed-at-utc")
+
     phase3 = subparsers.add_parser("phase3")
     phase3_commands = phase3.add_subparsers(dest="phase3_command", required=True)
     for phase3_command in ("prepare", "train-validate", "report-input"):
@@ -261,6 +357,51 @@ def _emit(**payload: object) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "model-platform":
+        observed_at = args.observed_at_utc or datetime.now(UTC).isoformat().replace(
+            "+00:00", "Z"
+        )
+        principal = active_gcloud_principal()
+        if args.model_platform_command == "preflight-bigquery":
+            preflight_receipt = run_read_only_preflight(
+                args.output_receipt,
+                observed_at_utc=observed_at,
+                observed_principal=principal,
+            )
+            _emit(
+                status=preflight_receipt["status"],
+                authorized_view=preflight_receipt["authorized_view"],
+                observed_row_count=preflight_receipt["observed_row_count"],
+                model_reader_identity_verified=preflight_receipt[
+                    "model_reader_identity_verified"
+                ],
+                receipt=str(args.output_receipt.resolve()),
+                training_status=preflight_receipt["training_status"],
+                evaluation_status=preflight_receipt["evaluation_status"],
+            )
+            return (
+                0
+                if preflight_receipt["status"] == "READY_FOR_EXPLICIT_COHORT_SYNC"
+                else 2
+            )
+        if args.model_platform_command == "read-bigquery-cohort":
+            cohort_receipt = run_read_only_cohort_reader(
+                args.output_receipt,
+                training_cohort_uuid=args.training_cohort_uuid,
+                observed_at_utc=observed_at,
+                observed_principal=principal,
+            )
+            _emit(
+                status=cohort_receipt["status"],
+                training_cohort_uuid=cohort_receipt["training_cohort_uuid"],
+                row_count=cohort_receipt["row_count"],
+                training_ready=cohort_receipt["training_ready"],
+                receipt=str(args.output_receipt.resolve()),
+            )
+            return 0 if cohort_receipt["training_ready"] is True else 2
+        raise AssertionError(
+            f"unhandled model-platform command: {args.model_platform_command}"
+        )
     if args.command == "onnx":
         if args.onnx_command != "tune":
             raise AssertionError(f"unhandled ONNX command: {args.onnx_command}")
@@ -446,6 +587,98 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         raise AssertionError(
             f"unhandled Neon adapter command: {args.neon_adapter_command}"
+        )
+
+    if args.command == "observational-standard":
+        if args.observational_command == "train":
+            result = train_observational_standard(
+                args.input,
+                args.output,
+                source_domain=args.source_domain,
+                random_state=args.seed,
+                hgb_max_iter=args.hgb_max_iter,
+                overwrite=args.overwrite,
+            )
+            _emit(
+                status=result["status"],
+                artifact=str(args.output.resolve()),
+                model_version=result["model_version"],
+                selected_candidate=result["selected_candidate"],
+                data_scope=result["data_scope"],
+                real_data_status=result["real_data_status"],
+                locked_test_read=result["locked_test_read"],
+            )
+            return 0 if result["status"] == "TRAINED" else 2
+        if args.observational_command == "export-baseline-shadow":
+            result = export_baseline_shadow_bundle(
+                args.output,
+                overwrite=args.overwrite,
+            )
+            _emit(
+                status="EXPORTED_BASELINE_SHADOW",
+                artifact=str(args.output.resolve()),
+                model_release=result["model_release"],
+                feature_schema_hash=result["feature_schema_hash"],
+                real_data_status=result["real_data_status"],
+                stage=result["stage"],
+            )
+            return 0
+        if args.observational_command == "verify-baseline-shadow":
+            result = verify_baseline_shadow_bundle(args.bundle)
+            _emit(**result)
+            return 0
+        if args.observational_command == "export-candidate-shadow":
+            result = export_candidate_shadow_bundle(
+                args.input,
+                args.output,
+                active_bundle=args.active_bundle,
+                candidate_name=args.candidate,
+                source_domain=args.source_domain,
+                random_state=args.seed,
+                hgb_max_iter=args.hgb_max_iter,
+            )
+            _emit(
+                status="EXPORTED_CANDIDATE_SHADOW",
+                artifact=str(args.output.resolve()),
+                model_release=result["model_release"],
+                candidate_algorithm=result["candidate_algorithm"],
+                model_artifact_sha256=result["model_artifact_sha256"],
+                feature_schema_hash=result["feature_schema_hash"],
+                real_data_status=result["real_data_status"],
+                stage=result["stage"],
+                thresholds=result["thresholds"],
+                delivery_eligible=result["delivery_eligible"],
+            )
+            return 0
+        if args.observational_command == "verify-candidate-shadow":
+            result = verify_candidate_shadow_bundle(args.bundle)
+            _emit(**result)
+            return 0
+        if args.observational_command == "export-training-reference":
+            result = export_training_reference_bundle(
+                args.input,
+                args.candidate_bundle,
+                args.output,
+                generated_at=args.generated_at,
+            )
+            _emit(
+                status="EXPORTED_TRAINING_REFERENCE",
+                artifact=str(args.output.resolve()),
+                reference_release=result["reference_release"],
+                reference_method=result["reference_method"],
+                reference_artifact_sha256=result["reference_artifact_sha256"],
+                training_split_digest=result["training_split_digest"],
+                persistence_training_mae=result["persistence_training_mae"],
+                thresholds=result["thresholds"],
+                stage=result["stage"],
+            )
+            return 0
+        if args.observational_command == "verify-training-reference":
+            result = verify_training_reference_bundle(args.bundle)
+            _emit(**result)
+            return 0
+        raise AssertionError(
+            f"unhandled observational-standard command: {args.observational_command}"
         )
 
     if args.command == "factory":
