@@ -158,6 +158,8 @@ AUTHORIZED_ENVELOPE_FIELDS: Final[tuple[str, ...]] = (
     "training_cohort_uuid",
     "cohort_digest",
     "split_digest",
+    "public_cohort_digest",
+    "public_split_digest",
     "feature_schema_uuid",
     "feature_schema_hash",
     "split_policy",
@@ -652,27 +654,8 @@ def bigquery_training_contract() -> dict[str, object]:
         "required_views": ["authorized_or_materialized_training_view"],
         "selection_roles": ["train", "validation"],
         "view_required_columns": [
-            "training_cohort_uuid",
-            "cohort_digest",
-            "split_digest",
-            "training_subject_uuid",
-            "training_capture_set_uuid",
-            "exact_window_id",
-            "source_set",
-            "window_start_ms",
-            "window_end_ms",
-            "feature_schema_uuid",
-            "feature_schema_hash",
-            "feature_values",
-            "label_uuid",
-            "label_revision_uuid",
-            "review_uuid",
-            "review_disposition",
-            "evaluation_class",
-            "temporal_stage",
-            "observation_code",
-            "split_role",
-            "source_row_digest",
+            *AUTHORIZED_ENVELOPE_FIELDS,
+            *AUTHORIZED_ROW_FIELDS,
         ],
         "sequence_group_key": "training_capture_set_uuid",
         "source_set_mapping": {
@@ -735,6 +718,64 @@ def _authorized_row_mapping(row: object) -> dict[str, object]:
         raise ValueError("authorized row must be a mapping or Row-like object") from error
 
 
+def _recompute_public_training_digests(
+    rows: Sequence[Mapping[str, object]],
+    envelope: Mapping[str, object],
+) -> tuple[str, str]:
+    ordered_members = sorted(
+        (
+            [
+                row["training_subject_uuid"],
+                row["training_capture_set_uuid"],
+                row["exact_window_id"],
+                row["split_role"],
+                row["window_start_ms"],
+                row["source_row_digest"],
+            ]
+            for row in rows
+        ),
+        key=lambda member: (
+            str(member[0]),
+            int(cast(int, member[4])),
+            str(member[2]),
+        ),
+    )
+    public_split_material = [
+        [member[0], member[2], member[3]] for member in ordered_members
+    ]
+    public_cohort_material = [
+        envelope["feature_schema_uuid"],
+        envelope["feature_schema_hash"],
+        envelope["split_policy"],
+        envelope["purge_seconds"],
+        envelope["truth_state"],
+        ordered_members,
+    ]
+    return (
+        sha256_json(public_cohort_material),
+        sha256_json(public_split_material),
+    )
+
+
+def _validate_public_training_digests(
+    rows: Sequence[Mapping[str, object]],
+    envelope: Mapping[str, object],
+) -> None:
+    supplied_cohort = _require_sha256(
+        envelope["public_cohort_digest"], "public_cohort_digest"
+    )
+    supplied_split = _require_sha256(
+        envelope["public_split_digest"], "public_split_digest"
+    )
+    recomputed_cohort, recomputed_split = _recompute_public_training_digests(
+        rows, envelope
+    )
+    if supplied_cohort != recomputed_cohort:
+        raise ValueError("public_cohort_digest does not match authorized rows")
+    if supplied_split != recomputed_split:
+        raise ValueError("public_split_digest does not match authorized rows")
+
+
 def synchronize_authorized_training_rows(rows: Iterable[object]) -> dict[str, object]:
     """Build one hash-closed model handoff from flat authorized BigQuery rows."""
 
@@ -777,6 +818,7 @@ def synchronize_authorized_training_rows(rows: Iterable[object]) -> dict[str, ob
     source_digests = [str(row["source_row_digest"]) for row in projected_rows]
     if len(source_digests) != len(set(source_digests)):
         raise ValueError("duplicate source_row_digest")
+    _validate_public_training_digests(values, envelope)
 
     body: dict[str, object] = {
         "contract_version": 1,
@@ -801,6 +843,8 @@ def validate_model_training_handoff(handoff: Mapping[str, object]) -> dict[str, 
         "training_cohort_uuid",
         "cohort_digest",
         "split_digest",
+        "public_cohort_digest",
+        "public_split_digest",
         "feature_schema_uuid",
         "feature_schema_hash",
         "split_policy",
@@ -827,7 +871,13 @@ def validate_model_training_handoff(handoff: Mapping[str, object]) -> dict[str, 
         raise ValueError("handoff_digest does not match public handoff body")
     for field in ("training_cohort_uuid", "feature_schema_uuid"):
         _require_uuid(handoff[field], field)
-    for field in ("cohort_digest", "split_digest", "feature_schema_hash"):
+    for field in (
+        "cohort_digest",
+        "split_digest",
+        "public_cohort_digest",
+        "public_split_digest",
+        "feature_schema_hash",
+    ):
         _require_sha256(handoff[field], field)
     if handoff["sequence_group_key"] != "training_capture_set_uuid":
         raise ValueError("sequence_group_key must be training_capture_set_uuid")
@@ -992,6 +1042,9 @@ def validate_model_training_handoff(handoff: Mapping[str, object]) -> dict[str, 
             )
             if train_end + purge_ms > validation_start:
                 raise ValueError("chronological target purge violated")
+    _validate_public_training_digests(
+        cast(Sequence[Mapping[str, object]], rows), handoff
+    )
     return {
         "status": (
             "VALID_SELECTION_HANDOFF"

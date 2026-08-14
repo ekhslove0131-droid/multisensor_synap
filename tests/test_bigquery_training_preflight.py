@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -19,10 +20,62 @@ from multisensor_ml.platform_contract import synchronize_authorized_training_row
 COHORT_UUID = "10000000-0000-4000-8000-000000000001"
 WATCH_SCHEMA_UUID = "9b842d8c-8889-5259-acca-77baa0c7729d"
 WATCH_SCHEMA_HASH = "2857f8a16cd4450a18f8701c1c9c9f397dee4b291fefd2475279883a0f8a29de"
+GOLDEN_PUBLIC_COHORT_DIGEST = (
+    "e2947f1db7bab1dc1598e2eae69bc109fcd7607004452a57d3b929bd9fe7705f"
+)
+GOLDEN_PUBLIC_SPLIT_DIGEST = (
+    "7f6067b1a2a98d543a3a086a75a67a78b20c560aaffb31b58225de8fcdcf311a"
+)
 
 
 def _uuid(index: int) -> str:
     return f"20000000-0000-4000-8000-{index:012d}"
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _attach_public_digests(rows: list[dict[str, object]]) -> None:
+    members = sorted(
+        [
+            [
+                row["training_subject_uuid"],
+                row["training_capture_set_uuid"],
+                row["exact_window_id"],
+                row["split_role"],
+                row["window_start_ms"],
+                row["source_row_digest"],
+            ]
+            for row in rows
+        ],
+        key=lambda member: (member[0], member[4], member[2]),
+    )
+    public_split_digest = _canonical_sha256(
+        [[member[0], member[2], member[3]] for member in members]
+    )
+    first = rows[0]
+    public_cohort_digest = _canonical_sha256(
+        [
+            first["feature_schema_uuid"],
+            first["feature_schema_hash"],
+            first["split_policy"],
+            first["purge_seconds"],
+            first["truth_state"],
+            members,
+        ]
+    )
+    for row in rows:
+        row["public_cohort_digest"] = public_cohort_digest
+        row["public_split_digest"] = public_split_digest
 
 
 def _authorized_rows() -> list[dict[str, object]]:
@@ -67,6 +120,7 @@ def _authorized_rows() -> list[dict[str, object]]:
                     "source_row_digest": f"{1000 + index:064x}",
                 }
             )
+    _attach_public_digests(rows)
     return rows
 
 
@@ -75,6 +129,8 @@ def _cloud_authorized_handoff_golden_rows() -> list[dict[str, object]]:
         "training_cohort_uuid": "00000000-0000-4000-8000-000000000100",
         "cohort_digest": "7910d86a46230a04b77d7ece1b6979996c484ceb0872653dc37e4a63c238241b",
         "split_digest": "2a66192d9a770a3483d724b570a36f8726297dcba2e4e2659444a93402b457f3",
+        "public_cohort_digest": GOLDEN_PUBLIC_COHORT_DIGEST,
+        "public_split_digest": GOLDEN_PUBLIC_SPLIT_DIGEST,
         "feature_schema_uuid": WATCH_SCHEMA_UUID,
         "feature_schema_hash": WATCH_SCHEMA_HASH,
         "split_policy": "PERSON_GROUP",
@@ -152,6 +208,7 @@ def test_zero_row_authorized_view_is_blocked_without_starting_training() -> None
     assert receipt["kaggle_started"] is False
     assert receipt["h10_only_status"] == "PROPOSED_NOT_IMPLEMENTED"
     assert receipt["watch_h10_status"] == "PROPOSED_NOT_APPROVED"
+    assert len(EXPECTED_VIEW_FIELDS) == 26
 
 
 @pytest.mark.parametrize(
@@ -190,6 +247,22 @@ def test_preflight_rejects_missing_public_contract_field() -> None:
             schema_fields=fields,
             row_count=0,
             observed_at_utc="2026-08-13T12:00:00Z",
+            observed_principal=EXPECTED_MODEL_READER,
+        )
+
+
+def test_live_24_field_schema_is_blocked_until_public_digest_migration() -> None:
+    legacy_fields = tuple(
+        field
+        for field in EXPECTED_VIEW_FIELDS
+        if field not in {"public_cohort_digest", "public_split_digest"}
+    )
+
+    with pytest.raises(ValueError, match="missing authorized field: public_cohort_digest"):
+        build_preflight_receipt(
+            schema_fields=legacy_fields,
+            row_count=0,
+            observed_at_utc="2026-08-14T00:00:00Z",
             observed_principal=EXPECTED_MODEL_READER,
         )
 
@@ -273,7 +346,7 @@ def test_preflight_receipt_is_create_only(tmp_path: Path) -> None:
         )
 
 
-def test_contract_valid_cohort_is_ready_using_opaque_envelope_digests() -> None:
+def test_contract_valid_cohort_is_ready_using_recomputed_public_digests() -> None:
     receipt = build_cohort_readiness_receipt(
         rows=_authorized_rows(),
         schema_fields=EXPECTED_VIEW_FIELDS,
@@ -293,13 +366,19 @@ def test_contract_valid_cohort_is_ready_using_opaque_envelope_digests() -> None:
     assert receipt["training_cohort_uuid"] == COHORT_UUID
     assert receipt["cohort_digest"] == "a" * 64
     assert receipt["split_digest"] == "b" * 64
+    assert receipt["public_cohort_digest"] == _authorized_rows()[0][
+        "public_cohort_digest"
+    ]
+    assert receipt["public_split_digest"] == _authorized_rows()[0][
+        "public_split_digest"
+    ]
     assert receipt["feature_schema_uuid"] == WATCH_SCHEMA_UUID
     assert receipt["feature_schema_hash"] == WATCH_SCHEMA_HASH
     assert receipt["model_reader_identity_verified"] is True
     assert receipt["locked_access"] is False
     assert len(receipt["canonical_handoff_digest"]) == 64
-    assert receipt["opaque_envelope_digest_policy"] == (
-        "SINGLETON_LOWERCASE_SHA256_PROJECTOR_VERIFIED"
+    assert receipt["public_digest_policy"] == (
+        "INDEPENDENT_RECOMPUTE_FROM_AUTHORIZED_ROWS"
     )
     assert "private_digest_verification" not in receipt
     assert receipt["fit_call_count"] == 0
@@ -311,8 +390,10 @@ def test_model_canonicalization_matches_cloud_authorized_handoff_golden() -> Non
     )
 
     assert handoff["handoff_digest"] == (
-        "562e5cc5ea84fa502b4a660b748f153e03a39e8b6c97786ba31d349a6943b846"
+        "ee97620fbe4dd243bdd259ba0cdf4e644ce2e0d037b8117fce2b7df04e250400"
     )
+    assert handoff["public_cohort_digest"] == GOLDEN_PUBLIC_COHORT_DIGEST
+    assert handoff["public_split_digest"] == GOLDEN_PUBLIC_SPLIT_DIGEST
     assert handoff["locked_access"] is False
     assert [row["split_role"] for row in handoff["rows"]] == [
         "TRAIN",
@@ -333,11 +414,14 @@ def test_zero_row_cohort_is_blocked_without_a_handoff_digest() -> None:
     assert receipt["training_ready"] is False
     assert receipt["row_count"] == 0
     assert receipt["canonical_handoff_digest"] is None
+    assert receipt["public_cohort_digest"] is None
+    assert receipt["public_split_digest"] is None
     assert receipt["fit_call_count"] == 0
 
 
 def test_missing_class_support_is_blocked_with_counts_only() -> None:
     rows = [row for row in _authorized_rows() if row["evaluation_class"] == "POSITIVE"]
+    _attach_public_digests(rows)
 
     receipt = build_cohort_readiness_receipt(
         rows=rows,
@@ -361,6 +445,7 @@ def test_not_evaluable_truth_never_becomes_training_ready() -> None:
     rows = _authorized_rows()
     for row in rows:
         row["truth_state"] = "NOT_EVALUABLE"
+    _attach_public_digests(rows)
 
     receipt = build_cohort_readiness_receipt(
         rows=rows,

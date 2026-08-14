@@ -91,6 +91,10 @@ def test_bigquery_contract_is_frozen_uuid_only_and_has_no_live_claim() -> None:
     assert "source_row_digest" in payload["view_required_columns"]
     assert "review_disposition" in payload["view_required_columns"]
     assert payload["handoff_digest_policy"] == "RECOMPUTE_AND_REJECT_MISMATCH"
+    assert payload["view_required_columns"] == [
+        *platform_contract.AUTHORIZED_ENVELOPE_FIELDS,
+        *platform_contract.AUTHORIZED_ROW_FIELDS,
+    ]
     assert payload["reviewed_event_anchor_status"] == "BLOCKED_PENDING_CONTRACT"
     assert payload["blocked_metrics"] == ["event_delay", "forecast_lead_time"]
     assert payload["training_ready_variants"] == ["watch_only"]
@@ -115,6 +119,36 @@ def _seal_handoff(handoff: dict[str, object]) -> dict[str, object]:
         ).encode("utf-8")
     ).hexdigest()
     return handoff
+
+
+def _public_digests(handoff: dict[str, object]) -> tuple[str, str]:
+    members = sorted(
+        [
+            [
+                row["training_subject_uuid"],
+                row["training_capture_set_uuid"],
+                row["exact_window_id"],
+                row["split_role"],
+                row["window_start_ms"],
+                row["source_row_digest"],
+            ]
+            for row in handoff["rows"]
+        ],
+        key=lambda member: (member[0], member[4], member[2]),
+    )
+    split_material = [[member[0], member[2], member[3]] for member in members]
+    cohort_material = [
+        handoff["feature_schema_uuid"],
+        handoff["feature_schema_hash"],
+        handoff["split_policy"],
+        handoff["purge_seconds"],
+        handoff["truth_state"],
+        members,
+    ]
+    return (
+        hashlib.sha256(canonical_json(cohort_material).encode("utf-8")).hexdigest(),
+        hashlib.sha256(canonical_json(split_material).encode("utf-8")).hexdigest(),
+    )
 
 
 def _cloud_handoff() -> dict[str, object]:
@@ -182,6 +216,9 @@ def _cloud_handoff() -> dict[str, object]:
             },
         ],
     }
+    public_cohort_digest, public_split_digest = _public_digests(handoff)
+    handoff["public_cohort_digest"] = public_cohort_digest
+    handoff["public_split_digest"] = public_split_digest
     return _seal_handoff(handoff)
 
 
@@ -191,6 +228,8 @@ def _authorized_rows() -> list[dict[str, object]]:
         "training_cohort_uuid",
         "cohort_digest",
         "split_digest",
+        "public_cohort_digest",
+        "public_split_digest",
         "feature_schema_uuid",
         "feature_schema_hash",
         "split_policy",
@@ -283,6 +322,12 @@ def test_authorized_rows_build_one_order_independent_handoff() -> None:
     assert validate_model_training_handoff(from_dicts)["status"] == (
         "VALID_SELECTION_HANDOFF"
     )
+    assert from_dicts["public_cohort_digest"] == _cloud_handoff()[
+        "public_cohort_digest"
+    ]
+    assert from_dicts["public_split_digest"] == _cloud_handoff()[
+        "public_split_digest"
+    ]
 
 
 def test_authorized_rows_reject_empty_input() -> None:
@@ -298,6 +343,8 @@ def test_authorized_rows_reject_empty_input() -> None:
         ("missing_validation", "train and validation"),
         ("duplicate_window", "duplicate exact_window_id"),
         ("duplicate_source", "duplicate source_row_digest"),
+        ("null_public_digest", "public_cohort_digest"),
+        ("wrong_public_digest", "public_cohort_digest does not match"),
         ("private_field", "unknown or private authorized field"),
     ],
 )
@@ -316,6 +363,12 @@ def test_authorized_rows_fail_closed(
         rows[1]["exact_window_id"] = rows[0]["exact_window_id"]
     elif mutation == "duplicate_source":
         rows[1]["source_row_digest"] = rows[0]["source_row_digest"]
+    elif mutation == "null_public_digest":
+        rows[0]["public_cohort_digest"] = None
+        rows[1]["public_cohort_digest"] = None
+    elif mutation == "wrong_public_digest":
+        rows[0]["public_cohort_digest"] = "9" * 64
+        rows[1]["public_cohort_digest"] = "9" * 64
     elif mutation == "private_field":
         rows[0]["person_uuid"] = "private"
     else:  # pragma: no cover - the parameter table is closed above
