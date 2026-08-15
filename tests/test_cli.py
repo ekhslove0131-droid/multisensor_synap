@@ -182,6 +182,10 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
             "read-bigquery-cohort",
             "--training-cohort-uuid",
             "10000000-0000-4000-8000-000000000001",
+            "--expected-public-cohort-digest",
+            "a" * 64,
+            "--expected-public-split-digest",
+            "b" * 64,
             "--output-receipt",
             "cohort-readiness.json",
         ]
@@ -190,6 +194,8 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
     assert cohort_reader.training_cohort_uuid == (
         "10000000-0000-4000-8000-000000000001"
     )
+    assert cohort_reader.expected_public_cohort_digest == "a" * 64
+    assert cohort_reader.expected_public_split_digest == "b" * 64
     assert str(cohort_reader.output_receipt) == "cohort-readiness.json"
 
 

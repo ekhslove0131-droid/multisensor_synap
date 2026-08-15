@@ -330,6 +330,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     model_platform_cohort.add_argument("--training-cohort-uuid", required=True)
     model_platform_cohort.add_argument(
+        "--expected-public-cohort-digest", required=True
+    )
+    model_platform_cohort.add_argument(
+        "--expected-public-split-digest", required=True
+    )
+    model_platform_cohort.add_argument(
         "--output-receipt", type=Path, required=True
     )
     model_platform_cohort.add_argument("--observed-at-utc")
@@ -388,6 +394,8 @@ def main(argv: list[str] | None = None) -> int:
             cohort_receipt = run_read_only_cohort_reader(
                 args.output_receipt,
                 training_cohort_uuid=args.training_cohort_uuid,
+                expected_public_cohort_digest=args.expected_public_cohort_digest,
+                expected_public_split_digest=args.expected_public_split_digest,
                 observed_at_utc=observed_at,
                 observed_principal=principal,
             )

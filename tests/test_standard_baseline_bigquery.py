@@ -117,6 +117,16 @@ def _rows() -> list[dict[str, object]]:
     return rows
 
 
+def _expected_public_digests(
+    rows: list[dict[str, object]] | None = None,
+) -> dict[str, str]:
+    values = rows or _rows()
+    return {
+        "expected_public_cohort_digest": str(values[0]["public_cohort_digest"]),
+        "expected_public_split_digest": str(values[0]["public_split_digest"]),
+    }
+
+
 class _RowLike:
     def __init__(self, values: dict[str, object]) -> None:
         self._values = values
@@ -174,6 +184,7 @@ def test_exact_24_field_order_is_required() -> None:
             rows=(),
             schema_fields=shuffled,
             requested_standard_cohort_uuid=STANDARD_COHORT_UUID,
+            **_expected_public_digests(),
             observed_at_utc="2026-08-15T00:00:00Z",
             observed_principal=EXPECTED_MODEL_READER,
         )
@@ -284,6 +295,7 @@ def test_zero_real_rows_are_blocked_without_fit() -> None:
         rows=(),
         schema_fields=STANDARD_BASELINE_VIEW_FIELDS,
         requested_standard_cohort_uuid=STANDARD_COHORT_UUID,
+        **_expected_public_digests(),
         observed_at_utc="2026-08-15T00:00:00Z",
         observed_principal=EXPECTED_MODEL_READER,
     )
@@ -298,10 +310,13 @@ def test_zero_real_rows_are_blocked_without_fit() -> None:
 
 
 def test_valid_rows_produce_read_only_receipt_without_fit() -> None:
+    rows = _rows()
     receipt = build_standard_cohort_readiness_receipt(
-        rows=_rows(),
+        rows=rows,
         schema_fields=STANDARD_BASELINE_VIEW_FIELDS,
         requested_standard_cohort_uuid=STANDARD_COHORT_UUID,
+        expected_public_cohort_digest=str(rows[0]["public_cohort_digest"]),
+        expected_public_split_digest=str(rows[0]["public_split_digest"]),
         observed_at_utc="2026-08-15T00:00:00Z",
         observed_principal=EXPECTED_MODEL_READER,
     )
@@ -312,6 +327,58 @@ def test_valid_rows_produce_read_only_receipt_without_fit() -> None:
     assert receipt["target_name"] == "no_pattern_median"
     assert receipt["target_unit"] == "positive_robust_z"
     assert receipt["fit_call_count"] == 0
+    assert receipt["public_digest_policy"] == (
+        "EXPECTED_PUBLIC_COHORT_AND_SPLIT_DIGEST_PIN"
+    )
+    assert receipt["canonical_handoff_digest_policy"] == (
+        "RECOMPUTED_AFTER_EXPECTED_PUBLIC_DIGEST_MATCH"
+    )
+    assert receipt["expected_public_digests_match"] is True
+
+
+def test_expected_public_digest_mismatch_blocks_standard_dataset_use() -> None:
+    rows = _rows()
+    receipt = build_standard_cohort_readiness_receipt(
+        rows=rows,
+        schema_fields=STANDARD_BASELINE_VIEW_FIELDS,
+        requested_standard_cohort_uuid=STANDARD_COHORT_UUID,
+        expected_public_cohort_digest=str(rows[0]["public_cohort_digest"]),
+        expected_public_split_digest="f" * 64,
+        observed_at_utc="2026-08-15T00:00:00Z",
+        observed_principal=EXPECTED_MODEL_READER,
+    )
+
+    assert receipt["status"] == "BLOCKED_EXPECTED_PUBLIC_DIGEST_MISMATCH"
+    assert receipt["training_ready"] is False
+    assert receipt["fit_call_count"] == 0
+    assert receipt["canonical_handoff_digest"] is None
+    assert receipt["canonical_handoff_digest_policy"] == (
+        "RECOMPUTED_AFTER_EXPECTED_PUBLIC_DIGEST_MATCH"
+    )
+    assert "rows" not in receipt
+
+
+def test_validated_standard_rows_prepare_typed_trainer_inputs_without_fit() -> None:
+    import multisensor_ml.standard_baseline_bigquery as module
+
+    rows = _rows()
+    prepared = module.prepare_standard_dataset_handoff(
+        rows=rows, **_expected_public_digests(rows)
+    )
+
+    assert prepared.task == "stable_standard_regression"
+    assert prepared.feature_names == tuple(FEATURE_NAMES)
+    assert prepared.train_features.shape == (1, len(FEATURE_NAMES))
+    assert prepared.validation_features.shape == (1, len(FEATURE_NAMES))
+    assert prepared.train_features.dtype.name == "float32"
+    assert prepared.train_targets.dtype.name == "float32"
+    assert prepared.train_targets.tolist() == [0.25]
+    assert prepared.validation_targets.tolist() == [0.75]
+    assert prepared.train_subject_groups == prepared.validation_subject_groups
+    assert prepared.public_cohort_digest == rows[0]["public_cohort_digest"]
+    assert prepared.public_split_digest == rows[0]["public_split_digest"]
+    assert len(prepared.canonical_handoff_digest) == 64
+    assert prepared.fit_call_count == 0
 
 
 def test_reader_uses_bound_uuid_and_only_standard_authorized_view(tmp_path: Path) -> None:
@@ -331,6 +398,7 @@ def test_reader_uses_bound_uuid_and_only_standard_authorized_view(tmp_path: Path
     receipt = run_read_only_standard_cohort_reader(
         tmp_path / "standard-receipt.json",
         standard_cohort_uuid=STANDARD_COHORT_UUID,
+        **_expected_public_digests(),
         observed_at_utc="2026-08-15T00:00:00Z",
         observed_principal=EXPECTED_MODEL_READER,
         runner=runner,

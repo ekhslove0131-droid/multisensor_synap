@@ -124,6 +124,16 @@ def _authorized_rows() -> list[dict[str, object]]:
     return rows
 
 
+def _expected_public_digests(
+    rows: list[dict[str, object]] | None = None,
+) -> dict[str, str]:
+    values = rows or _authorized_rows()
+    return {
+        "expected_public_cohort_digest": str(values[0]["public_cohort_digest"]),
+        "expected_public_split_digest": str(values[0]["public_split_digest"]),
+    }
+
+
 def _cloud_authorized_handoff_golden_rows() -> list[dict[str, object]]:
     envelope: dict[str, object] = {
         "training_cohort_uuid": "00000000-0000-4000-8000-000000000100",
@@ -276,9 +286,10 @@ def test_nonempty_view_still_requires_explicit_cohort_key_before_sync() -> None:
     )
 
     assert receipt["status"] == "AWAITING_EXPLICIT_FROZEN_COHORT_KEY"
-    assert receipt["required_next_input"][:2] == [
+    assert receipt["required_next_input"][:3] == [
         "training_cohort_uuid",
-        "cohort_digest",
+        "expected_public_cohort_digest",
+        "expected_public_split_digest",
     ]
     assert receipt["sync_status"] == "NOT STARTED"
     assert receipt["training_status"] == "NOT STARTED"
@@ -347,10 +358,13 @@ def test_preflight_receipt_is_create_only(tmp_path: Path) -> None:
 
 
 def test_contract_valid_cohort_is_ready_using_recomputed_public_digests() -> None:
+    rows = _authorized_rows()
     receipt = build_cohort_readiness_receipt(
-        rows=_authorized_rows(),
+        rows=rows,
         schema_fields=EXPECTED_VIEW_FIELDS,
         requested_training_cohort_uuid=COHORT_UUID,
+        expected_public_cohort_digest=str(rows[0]["public_cohort_digest"]),
+        expected_public_split_digest=str(rows[0]["public_split_digest"]),
         observed_at_utc="2026-08-13T12:00:00Z",
         observed_principal=EXPECTED_MODEL_READER,
     )
@@ -378,10 +392,73 @@ def test_contract_valid_cohort_is_ready_using_recomputed_public_digests() -> Non
     assert receipt["locked_access"] is False
     assert len(receipt["canonical_handoff_digest"]) == 64
     assert receipt["public_digest_policy"] == (
-        "INDEPENDENT_RECOMPUTE_FROM_AUTHORIZED_ROWS"
+        "EXPECTED_PUBLIC_COHORT_AND_SPLIT_DIGEST_PIN"
     )
+    assert receipt["canonical_handoff_digest_policy"] == (
+        "RECOMPUTED_AFTER_EXPECTED_PUBLIC_DIGEST_MATCH"
+    )
+    assert receipt["expected_public_digests_match"] is True
     assert "private_digest_verification" not in receipt
     assert receipt["fit_call_count"] == 0
+
+
+def test_expected_public_digest_mismatch_blocks_before_dataset_use() -> None:
+    rows = _authorized_rows()
+    receipt = build_cohort_readiness_receipt(
+        rows=rows,
+        schema_fields=EXPECTED_VIEW_FIELDS,
+        requested_training_cohort_uuid=COHORT_UUID,
+        expected_public_cohort_digest="f" * 64,
+        expected_public_split_digest=str(rows[0]["public_split_digest"]),
+        observed_at_utc="2026-08-13T12:00:00Z",
+        observed_principal=EXPECTED_MODEL_READER,
+    )
+
+    assert receipt["status"] == "BLOCKED_EXPECTED_PUBLIC_DIGEST_MISMATCH"
+    assert receipt["training_ready"] is False
+    assert receipt["fit_call_count"] == 0
+    assert receipt["canonical_handoff_digest"] is None
+    assert receipt["canonical_handoff_digest_policy"] == (
+        "RECOMPUTED_AFTER_EXPECTED_PUBLIC_DIGEST_MATCH"
+    )
+    assert "rows" not in receipt
+
+
+def test_validated_behavior_rows_prepare_typed_trainer_inputs_without_fit() -> None:
+    import multisensor_ml.bigquery_training_preflight as module
+
+    rows = _authorized_rows()
+    prepared = module.prepare_behavior_dataset_handoff(
+        rows=rows, **_expected_public_digests(rows)
+    )
+
+    assert prepared.task == "reviewed_behavior_binary"
+    assert prepared.feature_names == tuple(FEATURE_NAMES)
+    assert prepared.train_features.shape == (2, len(FEATURE_NAMES))
+    assert prepared.validation_features.shape == (2, len(FEATURE_NAMES))
+    assert prepared.train_features.dtype.name == "float32"
+    assert prepared.train_targets.tolist() == [1, 0]
+    assert prepared.validation_targets.tolist() == [1, 0]
+    assert len(prepared.train_subject_groups) == 2
+    assert len(prepared.train_sequence_groups) == 2
+    assert prepared.public_cohort_digest == rows[0]["public_cohort_digest"]
+    assert prepared.public_split_digest == rows[0]["public_split_digest"]
+    assert len(prepared.canonical_handoff_digest) == 64
+    assert prepared.fit_call_count == 0
+
+
+def test_not_evaluable_rows_cannot_prepare_trainer_inputs() -> None:
+    import multisensor_ml.bigquery_training_preflight as module
+
+    rows = _authorized_rows()
+    for row in rows:
+        row["truth_state"] = "NOT_EVALUABLE"
+    _attach_public_digests(rows)
+
+    with pytest.raises(ValueError, match="REVIEWED_REAL"):
+        module.prepare_behavior_dataset_handoff(
+            rows=rows, **_expected_public_digests(rows)
+        )
 
 
 def test_model_canonicalization_matches_cloud_authorized_handoff_golden() -> None:
@@ -406,6 +483,7 @@ def test_zero_row_cohort_is_blocked_without_a_handoff_digest() -> None:
         rows=[],
         schema_fields=EXPECTED_VIEW_FIELDS,
         requested_training_cohort_uuid=COHORT_UUID,
+        **_expected_public_digests(),
         observed_at_utc="2026-08-13T12:00:00Z",
         observed_principal=EXPECTED_MODEL_READER,
     )
@@ -427,6 +505,7 @@ def test_missing_class_support_is_blocked_with_counts_only() -> None:
         rows=rows,
         schema_fields=EXPECTED_VIEW_FIELDS,
         requested_training_cohort_uuid=COHORT_UUID,
+        **_expected_public_digests(rows),
         observed_at_utc="2026-08-13T12:00:00Z",
         observed_principal=EXPECTED_MODEL_READER,
     )
@@ -451,6 +530,7 @@ def test_not_evaluable_truth_never_becomes_training_ready() -> None:
         rows=rows,
         schema_fields=EXPECTED_VIEW_FIELDS,
         requested_training_cohort_uuid=COHORT_UUID,
+        **_expected_public_digests(rows),
         observed_at_utc="2026-08-13T12:00:00Z",
         observed_principal=EXPECTED_MODEL_READER,
     )
@@ -495,6 +575,7 @@ def test_invalid_cohort_rows_fail_closed_without_exposing_rows(
         rows=rows,
         schema_fields=EXPECTED_VIEW_FIELDS,
         requested_training_cohort_uuid=COHORT_UUID,
+        **_expected_public_digests(rows),
         observed_at_utc="2026-08-13T12:00:00Z",
         observed_principal=EXPECTED_MODEL_READER,
     )
@@ -519,12 +600,14 @@ def test_cohort_reader_uses_bound_parameter_and_only_authorized_view(tmp_path: P
     receipt = run_read_only_cohort_reader(
         tmp_path / "cohort-receipt.json",
         training_cohort_uuid=COHORT_UUID,
+        **_expected_public_digests(),
         observed_at_utc="2026-08-13T12:00:00Z",
         observed_principal=EXPECTED_MODEL_READER,
         runner=runner,
     )
 
     assert receipt["status"] == "READY_FOR_SYNC_NOT_TRAINED"
+    assert receipt["expected_public_digests_match"] is True
     assert len(calls) == 2
     query_command = calls[1]
     assert (
@@ -547,6 +630,7 @@ def test_cohort_reader_rejects_noncanonical_uuid_before_query(tmp_path: Path) ->
         run_read_only_cohort_reader(
             tmp_path / "receipt.json",
             training_cohort_uuid="NOT-A-UUID",
+            **_expected_public_digests(),
             observed_at_utc="2026-08-13T12:00:00Z",
             observed_principal=EXPECTED_MODEL_READER,
             runner=lambda command: calls.append(command),
@@ -569,6 +653,7 @@ def test_cohort_reader_blocks_schema_mismatch_before_reading_rows(tmp_path: Path
     receipt = run_read_only_cohort_reader(
         tmp_path / "schema-blocked.json",
         training_cohort_uuid=COHORT_UUID,
+        **_expected_public_digests(),
         observed_at_utc="2026-08-13T12:00:00Z",
         observed_principal=EXPECTED_MODEL_READER,
         runner=runner,

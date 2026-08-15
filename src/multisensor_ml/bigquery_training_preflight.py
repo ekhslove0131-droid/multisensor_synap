@@ -6,12 +6,16 @@ import hashlib
 import json
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Final, cast
 from uuid import UUID
 
+import numpy as np
+
 from multisensor_ml.h10_runtime_contract import canonical_h10_feature_schema
+from multisensor_ml.observational_contract import FEATURE_NAMES
 from multisensor_ml.platform_contract import (
     AUTHORIZED_ENVELOPE_FIELDS,
     AUTHORIZED_ROW_FIELDS,
@@ -33,6 +37,35 @@ EXPECTED_VIEW_FIELDS: Final[tuple[str, ...]] = (
     *AUTHORIZED_ROW_FIELDS,
 )
 COHORT_READINESS_VERSION: Final[str] = "kidsignal-bigquery-cohort-readiness/v1"
+PUBLIC_DIGEST_PIN_POLICY: Final[str] = (
+    "EXPECTED_PUBLIC_COHORT_AND_SPLIT_DIGEST_PIN"
+)
+CANONICAL_HANDOFF_DIGEST_POLICY: Final[str] = (
+    "RECOMPUTED_AFTER_EXPECTED_PUBLIC_DIGEST_MATCH"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedBehaviorDataset:
+    """Validated arrays for the existing classifier trainer boundary."""
+
+    task: str
+    training_cohort_uuid: str
+    public_cohort_digest: str
+    public_split_digest: str
+    canonical_handoff_digest: str
+    feature_names: tuple[str, ...]
+    train_features: np.ndarray
+    train_targets: np.ndarray
+    train_subject_groups: tuple[str, ...]
+    train_sequence_groups: tuple[str, ...]
+    train_row_ids: tuple[str, ...]
+    validation_features: np.ndarray
+    validation_targets: np.ndarray
+    validation_subject_groups: tuple[str, ...]
+    validation_sequence_groups: tuple[str, ...]
+    validation_row_ids: tuple[str, ...]
+    fit_call_count: int = 0
 
 
 def _canonical_uuid(value: str, field: str) -> str:
@@ -43,6 +76,97 @@ def _canonical_uuid(value: str, field: str) -> str:
     if str(parsed) != value.lower():
         raise ValueError(f"{field} must be a canonical UUID")
     return str(parsed)
+
+
+def _require_sha256(value: str, field: str) -> str:
+    if len(value) != 64 or any(
+        character not in "0123456789abcdef" for character in value
+    ):
+        raise ValueError(f"{field} must be lowercase SHA-256")
+    return value
+
+
+def prepare_behavior_dataset_handoff(
+    *,
+    rows: Sequence[Mapping[str, object]],
+    expected_public_cohort_digest: str,
+    expected_public_split_digest: str,
+) -> PreparedBehaviorDataset:
+    """Validate pins and expose typed arrays without invoking model fitting."""
+
+    expected_cohort = _require_sha256(
+        expected_public_cohort_digest, "expected_public_cohort_digest"
+    )
+    expected_split = _require_sha256(
+        expected_public_split_digest, "expected_public_split_digest"
+    )
+    handoff = synchronize_authorized_training_rows(rows)
+    if (
+        handoff["public_cohort_digest"] != expected_cohort
+        or handoff["public_split_digest"] != expected_split
+    ):
+        raise ValueError("returned public digests do not match expected handoff")
+    if handoff["truth_state"] != "REVIEWED_REAL":
+        raise ValueError("prepared behavior dataset requires REVIEWED_REAL truth")
+    handoff_rows = cast(Sequence[Mapping[str, object]], handoff["rows"])
+
+    def prepare_split(
+        split: str,
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        tuple[str, ...],
+        tuple[str, ...],
+        tuple[str, ...],
+    ]:
+        selected = [row for row in handoff_rows if row["split_role"] == split]
+        labels = [str(row["evaluation_class"]) for row in selected]
+        if {"POSITIVE", "NEGATIVE"}.difference(labels):
+            raise ValueError(f"{split} requires positive and negative support")
+        features = np.asarray(
+            [
+                [
+                    cast(Mapping[str, object], row["feature_values"])[name]
+                    for name in FEATURE_NAMES
+                ]
+                for row in selected
+            ],
+            dtype=np.float32,
+        )
+        targets = np.asarray(
+            [1 if label == "POSITIVE" else 0 for label in labels],
+            dtype=np.int8,
+        )
+        features.setflags(write=False)
+        targets.setflags(write=False)
+        return (
+            features,
+            targets,
+            tuple(str(row["training_subject_uuid"]) for row in selected),
+            tuple(str(row["training_capture_set_uuid"]) for row in selected),
+            tuple(str(row["exact_window_id"]) for row in selected),
+        )
+
+    train = prepare_split("TRAIN")
+    validation = prepare_split("VALIDATION")
+    return PreparedBehaviorDataset(
+        task="reviewed_behavior_binary",
+        training_cohort_uuid=str(handoff["training_cohort_uuid"]),
+        public_cohort_digest=expected_cohort,
+        public_split_digest=expected_split,
+        canonical_handoff_digest=str(handoff["handoff_digest"]),
+        feature_names=tuple(FEATURE_NAMES),
+        train_features=train[0],
+        train_targets=train[1],
+        train_subject_groups=train[2],
+        train_sequence_groups=train[3],
+        train_row_ids=train[4],
+        validation_features=validation[0],
+        validation_targets=validation[1],
+        validation_subject_groups=validation[2],
+        validation_sequence_groups=validation[3],
+        validation_row_ids=validation[4],
+    )
 
 
 def _validate_exact_schema(schema_fields: Sequence[str]) -> tuple[str, ...]:
@@ -117,13 +241,14 @@ def build_preflight_receipt(
         "locked_access": False,
         "allowed_split_roles": ["TRAIN", "VALIDATION"],
         "sequence_group_key": "training_capture_set_uuid",
-        "handoff_digest_policy": "INDEPENDENT_RECOMPUTE_AFTER_EXPLICIT_COHORT_SYNC",
+        "handoff_digest_policy": CANONICAL_HANDOFF_DIGEST_POLICY,
         "h10_feature_schema_hash": H10_RUNTIME_SCHEMA_HASH,
         "h10_only_status": "PROPOSED_NOT_IMPLEMENTED",
         "watch_h10_status": "PROPOSED_NOT_APPROVED",
         "required_next_input": [
             "training_cohort_uuid",
-            "cohort_digest",
+            "expected_public_cohort_digest",
+            "expected_public_split_digest",
             "TRAIN and VALIDATION rows",
             "purge_seconds>=1800",
             "feature_schema_uuid and feature_schema_hash",
@@ -158,6 +283,8 @@ def _blocked_cohort_receipt(
     schema_fields: Sequence[str],
     rows: Sequence[Mapping[str, object]],
     blocked_reason: str,
+    expected_public_cohort_digest: str | None = None,
+    expected_public_split_digest: str | None = None,
 ) -> dict[str, object]:
     return {
         "schema_version": COHORT_READINESS_VERSION,
@@ -170,6 +297,9 @@ def _blocked_cohort_receipt(
         "split_digest": None,
         "public_cohort_digest": None,
         "public_split_digest": None,
+        "expected_public_cohort_digest": expected_public_cohort_digest,
+        "expected_public_split_digest": expected_public_split_digest,
+        "expected_public_digests_match": False,
         "row_count": len(rows),
         "split_class_counts": _split_class_counts(rows),
         "feature_schema_uuid": None,
@@ -182,7 +312,8 @@ def _blocked_cohort_receipt(
         "selection_contract_valid": False,
         "training_ready": False,
         "canonical_handoff_digest": None,
-        "public_digest_policy": "NO_ENVELOPE_ZERO_OR_INVALID_ROWS",
+        "canonical_handoff_digest_policy": CANONICAL_HANDOFF_DIGEST_POLICY,
+        "public_digest_policy": PUBLIC_DIGEST_PIN_POLICY,
         "status": status,
         "blocked_reason": blocked_reason,
         "fit_call_count": 0,
@@ -196,6 +327,8 @@ def build_cohort_readiness_receipt(
     rows: Sequence[Mapping[str, object]],
     schema_fields: Sequence[str],
     requested_training_cohort_uuid: str,
+    expected_public_cohort_digest: str,
+    expected_public_split_digest: str,
     observed_at_utc: str,
     observed_principal: str,
 ) -> dict[str, object]:
@@ -205,6 +338,12 @@ def build_cohort_readiness_receipt(
         requested_training_cohort_uuid, "training_cohort_uuid"
     )
     fields = _validate_exact_schema(schema_fields)
+    expected_cohort_digest = _require_sha256(
+        expected_public_cohort_digest, "expected_public_cohort_digest"
+    )
+    expected_split_digest = _require_sha256(
+        expected_public_split_digest, "expected_public_split_digest"
+    )
     if not observed_at_utc.endswith("Z"):
         raise ValueError("observed_at_utc must be UTC Z text")
     values = tuple(dict(row) for row in rows)
@@ -217,6 +356,8 @@ def build_cohort_readiness_receipt(
             schema_fields=fields,
             rows=values,
             blocked_reason="AUTHORIZED_VIEW_RETURNED_ZERO_ROWS",
+            expected_public_cohort_digest=expected_cohort_digest,
+            expected_public_split_digest=expected_split_digest,
         )
     if any(row.get("training_cohort_uuid") != requested_uuid for row in values):
         return _blocked_cohort_receipt(
@@ -227,6 +368,8 @@ def build_cohort_readiness_receipt(
             schema_fields=fields,
             rows=values,
             blocked_reason="REQUESTED_COHORT_UUID_MISMATCH",
+            expected_public_cohort_digest=expected_cohort_digest,
+            expected_public_split_digest=expected_split_digest,
         )
     try:
         handoff = synchronize_authorized_training_rows(values)
@@ -239,6 +382,24 @@ def build_cohort_readiness_receipt(
             schema_fields=fields,
             rows=values,
             blocked_reason=str(error),
+            expected_public_cohort_digest=expected_cohort_digest,
+            expected_public_split_digest=expected_split_digest,
+        )
+
+    if (
+        handoff["public_cohort_digest"] != expected_cohort_digest
+        or handoff["public_split_digest"] != expected_split_digest
+    ):
+        return _blocked_cohort_receipt(
+            status="BLOCKED_EXPECTED_PUBLIC_DIGEST_MISMATCH",
+            requested_training_cohort_uuid=requested_uuid,
+            observed_at_utc=observed_at_utc,
+            observed_principal=observed_principal,
+            schema_fields=fields,
+            rows=values,
+            blocked_reason="RETURNED_PUBLIC_DIGESTS_DO_NOT_MATCH_EXPECTED_HANDOFF",
+            expected_public_cohort_digest=expected_cohort_digest,
+            expected_public_split_digest=expected_split_digest,
         )
 
     counts = _split_class_counts(values)
@@ -271,6 +432,9 @@ def build_cohort_readiness_receipt(
         "split_digest": str(handoff["split_digest"]),
         "public_cohort_digest": str(handoff["public_cohort_digest"]),
         "public_split_digest": str(handoff["public_split_digest"]),
+        "expected_public_cohort_digest": expected_cohort_digest,
+        "expected_public_split_digest": expected_split_digest,
+        "expected_public_digests_match": True,
         "row_count": len(values),
         "split_class_counts": counts,
         "feature_schema_uuid": str(handoff["feature_schema_uuid"]),
@@ -287,7 +451,8 @@ def build_cohort_readiness_receipt(
         ),
         "training_ready": status == "READY_FOR_SYNC_NOT_TRAINED",
         "canonical_handoff_digest": str(handoff["handoff_digest"]),
-        "public_digest_policy": "INDEPENDENT_RECOMPUTE_FROM_AUTHORIZED_ROWS",
+        "canonical_handoff_digest_policy": CANONICAL_HANDOFF_DIGEST_POLICY,
+        "public_digest_policy": PUBLIC_DIGEST_PIN_POLICY,
         "status": status,
         "blocked_reason": blocked_reason,
         "fit_call_count": 0,
@@ -387,6 +552,8 @@ def run_read_only_cohort_reader(
     output_receipt: Path,
     *,
     training_cohort_uuid: str,
+    expected_public_cohort_digest: str,
+    expected_public_split_digest: str,
     observed_at_utc: str,
     observed_principal: str,
     runner: Callable[[list[str]], CompletedProcess[str]] = _run,
@@ -394,6 +561,12 @@ def run_read_only_cohort_reader(
     """Read exactly one public cohort with a bound UUID parameter."""
 
     cohort_uuid = _canonical_uuid(training_cohort_uuid, "training_cohort_uuid")
+    expected_cohort_digest = _require_sha256(
+        expected_public_cohort_digest, "expected_public_cohort_digest"
+    )
+    expected_split_digest = _require_sha256(
+        expected_public_split_digest, "expected_public_split_digest"
+    )
     if output_receipt.exists():
         raise FileExistsError(output_receipt)
     bq_target = AUTHORIZED_TRAINING_VIEW.replace(".", ":", 1)
@@ -419,6 +592,8 @@ def run_read_only_cohort_reader(
             schema_fields=EXPECTED_VIEW_FIELDS,
             rows=(),
             blocked_reason=str(error),
+            expected_public_cohort_digest=expected_cohort_digest,
+            expected_public_split_digest=expected_split_digest,
         )
         output_receipt.parent.mkdir(parents=True, exist_ok=True)
         with output_receipt.open("x", encoding="utf-8") as stream:
@@ -447,6 +622,8 @@ def run_read_only_cohort_reader(
         rows=_parse_authorized_rows(rows_result.stdout),
         schema_fields=parsed_schema,
         requested_training_cohort_uuid=cohort_uuid,
+        expected_public_cohort_digest=expected_cohort_digest,
+        expected_public_split_digest=expected_split_digest,
         observed_at_utc=observed_at_utc,
         observed_principal=observed_principal,
     )
