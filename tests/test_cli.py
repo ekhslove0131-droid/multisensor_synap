@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
+from multisensor_ml import cli
 from multisensor_ml.cli import build_parser
 
 
@@ -197,6 +202,84 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
     assert cohort_reader.expected_public_cohort_digest == "a" * 64
     assert cohort_reader.expected_public_split_digest == "b" * 64
     assert str(cohort_reader.output_receipt) == "cohort-readiness.json"
+
+    standard_cohort_reader = parser.parse_args(
+        [
+            "model-platform",
+            "read-standard-bigquery-cohort",
+            "--standard-cohort-uuid",
+            "00000000-0000-4000-8000-000000000099",
+            "--expected-public-cohort-digest",
+            "c" * 64,
+            "--expected-public-split-digest",
+            "d" * 64,
+            "--output-receipt",
+            "standard-cohort-readiness.json",
+        ]
+    )
+    assert (
+        standard_cohort_reader.model_platform_command
+        == "read-standard-bigquery-cohort"
+    )
+    assert standard_cohort_reader.standard_cohort_uuid == (
+        "00000000-0000-4000-8000-000000000099"
+    )
+    assert standard_cohort_reader.expected_public_cohort_digest == "c" * 64
+    assert standard_cohort_reader.expected_public_split_digest == "d" * 64
+    assert str(standard_cohort_reader.output_receipt) == (
+        "standard-cohort-readiness.json"
+    )
+
+
+def test_standard_cohort_cli_delegates_to_read_only_reader_without_fit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(cli, "active_gcloud_principal", lambda: "model-reader")
+
+    def fake_reader(output_receipt: Path, **kwargs: object) -> dict[str, object]:
+        calls.append({"output_receipt": output_receipt, **kwargs})
+        return {
+            "status": "BLOCKED_NO_REAL_COHORT",
+            "standard_cohort_uuid": kwargs["standard_cohort_uuid"],
+            "row_count": 0,
+            "training_ready": False,
+            "fit_call_count": 0,
+            "training_status": "NOT STARTED",
+            "evaluation_status": "NOT EVALUABLE",
+        }
+
+    monkeypatch.setattr(cli, "run_read_only_standard_cohort_reader", fake_reader)
+    output = tmp_path / "standard-receipt.json"
+    result = cli.main(
+        [
+            "model-platform",
+            "read-standard-bigquery-cohort",
+            "--standard-cohort-uuid",
+            "00000000-0000-4000-8000-000000000099",
+            "--expected-public-cohort-digest",
+            "c" * 64,
+            "--expected-public-split-digest",
+            "d" * 64,
+            "--output-receipt",
+            str(output),
+            "--observed-at-utc",
+            "2026-08-15T05:00:00Z",
+        ]
+    )
+
+    assert result == 2
+    assert calls == [
+        {
+            "output_receipt": output,
+            "standard_cohort_uuid": "00000000-0000-4000-8000-000000000099",
+            "expected_public_cohort_digest": "c" * 64,
+            "expected_public_split_digest": "d" * 64,
+            "observed_at_utc": "2026-08-15T05:00:00Z",
+            "observed_principal": "model-reader",
+        }
+    ]
 
 
 def test_kaggle_model_commands_parse() -> None:

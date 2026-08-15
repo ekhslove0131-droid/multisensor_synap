@@ -51,6 +51,10 @@ SUPPORTED_STANDARD_VERSION: Final[str] = "stable-stress-standard-v1"
 ELIGIBILITY_POLICY: Final[str] = "ELIGIBLE_NO_PATTERN_REAL"
 TARGET_NAME: Final[str] = "no_pattern_median"
 TARGET_UNIT: Final[str] = "positive_robust_z"
+STANDARD_TRAINER_ENTRYPOINT: Final[str] = "stable_standard_hourly_regression"
+STANDARD_CANDIDATE_LINEAGE_VERSION: Final[str] = (
+    "kidsignal-standard-candidate-lineage/v1"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,10 +62,19 @@ class PreparedStandardDataset:
     """Validated hourly arrays for the standard regression trainer boundary."""
 
     task: str
+    trainer_entrypoint: str
     standard_cohort_uuid: str
+    cohort_digest: str
+    split_digest: str
     public_cohort_digest: str
     public_split_digest: str
     canonical_handoff_digest: str
+    stable_standard_version: str
+    feature_schema_uuid: str
+    feature_schema_hash: str
+    split_policy: str
+    purge_seconds: int
+    eligibility_policy: str
     feature_names: tuple[str, ...]
     train_features: np.ndarray
     train_targets: np.ndarray
@@ -156,10 +169,11 @@ def _require_sha256(value: object, field: str) -> str:
 def prepare_standard_dataset_handoff(
     *,
     rows: Sequence[Mapping[str, object]],
+    readiness_receipt: Mapping[str, object],
     expected_public_cohort_digest: str,
     expected_public_split_digest: str,
 ) -> PreparedStandardDataset:
-    """Validate pins and expose typed arrays without invoking model fitting."""
+    """Validate the reader receipt and expose arrays without invoking fitting."""
 
     expected_cohort = _require_sha256(
         expected_public_cohort_digest, "expected_public_cohort_digest"
@@ -173,6 +187,13 @@ def prepare_standard_dataset_handoff(
         or handoff["public_split_digest"] != expected_split
     ):
         raise ValueError("returned public digests do not match expected handoff")
+    _validate_ready_receipt_for_prepared_dataset(
+        readiness_receipt=readiness_receipt,
+        handoff=handoff,
+        expected_public_cohort_digest=expected_cohort,
+        expected_public_split_digest=expected_split,
+        row_count=len(rows),
+    )
     handoff_rows = cast(Sequence[Mapping[str, object]], handoff["rows"])
 
     def prepare_split(
@@ -214,10 +235,19 @@ def prepare_standard_dataset_handoff(
     validation = prepare_split("VALIDATION")
     return PreparedStandardDataset(
         task="stable_standard_regression",
+        trainer_entrypoint=STANDARD_TRAINER_ENTRYPOINT,
         standard_cohort_uuid=str(handoff["standard_cohort_uuid"]),
+        cohort_digest=str(handoff["cohort_digest"]),
+        split_digest=str(handoff["split_digest"]),
         public_cohort_digest=expected_cohort,
         public_split_digest=expected_split,
         canonical_handoff_digest=str(handoff["handoff_digest"]),
+        stable_standard_version=str(handoff["stable_standard_version"]),
+        feature_schema_uuid=str(handoff["feature_schema_uuid"]),
+        feature_schema_hash=str(handoff["feature_schema_hash"]),
+        split_policy=str(handoff["split_policy"]),
+        purge_seconds=int(cast(int, handoff["purge_seconds"])),
+        eligibility_policy=str(handoff["eligibility_policy"]),
         feature_names=tuple(FEATURE_NAMES),
         train_features=train[0],
         train_targets=train[1],
@@ -230,6 +260,93 @@ def prepare_standard_dataset_handoff(
         validation_sequence_groups=validation[3],
         validation_row_ids=validation[4],
     )
+
+
+def _validate_ready_receipt_for_prepared_dataset(
+    *,
+    readiness_receipt: Mapping[str, object],
+    handoff: Mapping[str, object],
+    expected_public_cohort_digest: str,
+    expected_public_split_digest: str,
+    row_count: int,
+) -> None:
+    """Bind trainer inputs to the verified read-only model-reader receipt."""
+
+    if (
+        readiness_receipt.get("observed_principal") != EXPECTED_MODEL_READER
+        or readiness_receipt.get("model_reader_identity_verified") is not True
+    ):
+        raise ValueError("model-reader identity must be verified before trainer use")
+    if (
+        readiness_receipt.get("status") != "READY_FOR_SYNC_NOT_TRAINED"
+        or readiness_receipt.get("training_ready") is not True
+    ):
+        raise ValueError("readiness receipt is not training-ready")
+    if readiness_receipt.get("locked_access") is not False:
+        raise ValueError("LOCKED access is forbidden before trainer use")
+    if (
+        readiness_receipt.get("fit_call_count") != 0
+        or readiness_receipt.get("training_status") != "NOT STARTED"
+        or readiness_receipt.get("evaluation_status") != "NOT EVALUABLE"
+    ):
+        raise ValueError("readiness receipt must precede fitting and evaluation")
+    expected_values = {
+        "standard_cohort_uuid": handoff["standard_cohort_uuid"],
+        "cohort_digest": handoff["cohort_digest"],
+        "split_digest": handoff["split_digest"],
+        "public_cohort_digest": expected_public_cohort_digest,
+        "public_split_digest": expected_public_split_digest,
+        "expected_public_cohort_digest": expected_public_cohort_digest,
+        "expected_public_split_digest": expected_public_split_digest,
+        "canonical_handoff_digest": handoff["handoff_digest"],
+        "row_count": row_count,
+    }
+    for field, expected in expected_values.items():
+        if readiness_receipt.get(field) != expected:
+            raise ValueError(f"readiness receipt {field} does not match handoff")
+    schema_fields = readiness_receipt.get("schema_fields")
+    if schema_fields != list(STANDARD_BASELINE_VIEW_FIELDS):
+        raise ValueError("readiness receipt schema does not match standard contract")
+
+
+def build_standard_candidate_bundle_lineage(
+    prepared: PreparedStandardDataset,
+) -> dict[str, object]:
+    """Build immutable candidate lineage without fitting or creating a bundle."""
+
+    if prepared.fit_call_count != 0:
+        raise ValueError("prepared standard dataset must precede fitting")
+    if prepared.feature_names != tuple(FEATURE_NAMES):
+        raise ValueError("prepared standard feature order is not canonical")
+    return {
+        "schema_version": STANDARD_CANDIDATE_LINEAGE_VERSION,
+        "task": prepared.task,
+        "trainer_entrypoint": prepared.trainer_entrypoint,
+        "standard_cohort_uuid": prepared.standard_cohort_uuid,
+        "cohort_digest": prepared.cohort_digest,
+        "split_digest": prepared.split_digest,
+        "public_cohort_digest": prepared.public_cohort_digest,
+        "public_split_digest": prepared.public_split_digest,
+        "canonical_handoff_digest": prepared.canonical_handoff_digest,
+        "stable_standard_version": prepared.stable_standard_version,
+        "feature_schema_uuid": prepared.feature_schema_uuid,
+        "feature_schema_hash": prepared.feature_schema_hash,
+        "feature_names": list(prepared.feature_names),
+        "split_policy": prepared.split_policy,
+        "purge_seconds": prepared.purge_seconds,
+        "eligibility_policy": prepared.eligibility_policy,
+        "target_name": TARGET_NAME,
+        "target_unit": TARGET_UNIT,
+        "source_variant": "watch_only",
+        "source_set": ["watch"],
+        "onnx_execution_provider": "CPUExecutionProvider",
+        "locked_access": False,
+        "delivery_eligible": False,
+        "promotion_eligible": False,
+        "model_status": "NOT_TRAINED",
+        "evaluation_status": "NOT EVALUABLE",
+        "fit_call_count": 0,
+    }
 
 
 def _row_mapping(row: object) -> dict[str, object]:

@@ -362,8 +362,18 @@ def test_validated_standard_rows_prepare_typed_trainer_inputs_without_fit() -> N
     import multisensor_ml.standard_baseline_bigquery as module
 
     rows = _rows()
+    receipt = build_standard_cohort_readiness_receipt(
+        rows=rows,
+        schema_fields=STANDARD_BASELINE_VIEW_FIELDS,
+        requested_standard_cohort_uuid=STANDARD_COHORT_UUID,
+        **_expected_public_digests(rows),
+        observed_at_utc="2026-08-15T00:00:00Z",
+        observed_principal=EXPECTED_MODEL_READER,
+    )
     prepared = module.prepare_standard_dataset_handoff(
-        rows=rows, **_expected_public_digests(rows)
+        rows=rows,
+        readiness_receipt=receipt,
+        **_expected_public_digests(rows),
     )
 
     assert prepared.task == "stable_standard_regression"
@@ -377,8 +387,67 @@ def test_validated_standard_rows_prepare_typed_trainer_inputs_without_fit() -> N
     assert prepared.train_subject_groups == prepared.validation_subject_groups
     assert prepared.public_cohort_digest == rows[0]["public_cohort_digest"]
     assert prepared.public_split_digest == rows[0]["public_split_digest"]
+    assert prepared.cohort_digest == "a" * 64
+    assert prepared.split_digest == "b" * 64
+    assert prepared.feature_schema_uuid == WATCH_SCHEMA_UUID
+    assert prepared.feature_schema_hash == WATCH_SCHEMA_HASH
+    assert prepared.split_policy == "CHRONOLOGICAL_PER_SUBJECT"
+    assert prepared.purge_seconds == 1800
+    assert prepared.trainer_entrypoint == "stable_standard_hourly_regression"
     assert len(prepared.canonical_handoff_digest) == 64
     assert prepared.fit_call_count == 0
+
+    lineage = module.build_standard_candidate_bundle_lineage(prepared)
+    assert lineage == {
+        "schema_version": "kidsignal-standard-candidate-lineage/v1",
+        "task": "stable_standard_regression",
+        "trainer_entrypoint": "stable_standard_hourly_regression",
+        "standard_cohort_uuid": STANDARD_COHORT_UUID,
+        "cohort_digest": "a" * 64,
+        "split_digest": "b" * 64,
+        "public_cohort_digest": rows[0]["public_cohort_digest"],
+        "public_split_digest": rows[0]["public_split_digest"],
+        "canonical_handoff_digest": prepared.canonical_handoff_digest,
+        "stable_standard_version": "stable-stress-standard-v1",
+        "feature_schema_uuid": WATCH_SCHEMA_UUID,
+        "feature_schema_hash": WATCH_SCHEMA_HASH,
+        "feature_names": list(FEATURE_NAMES),
+        "split_policy": "CHRONOLOGICAL_PER_SUBJECT",
+        "purge_seconds": 1800,
+        "eligibility_policy": "ELIGIBLE_NO_PATTERN_REAL",
+        "target_name": "no_pattern_median",
+        "target_unit": "positive_robust_z",
+        "source_variant": "watch_only",
+        "source_set": ["watch"],
+        "onnx_execution_provider": "CPUExecutionProvider",
+        "locked_access": False,
+        "delivery_eligible": False,
+        "promotion_eligible": False,
+        "model_status": "NOT_TRAINED",
+        "evaluation_status": "NOT EVALUABLE",
+        "fit_call_count": 0,
+    }
+
+
+def test_prepared_standard_dataset_requires_verified_reader_receipt() -> None:
+    import multisensor_ml.standard_baseline_bigquery as module
+
+    rows = _rows()
+    receipt = build_standard_cohort_readiness_receipt(
+        rows=rows,
+        schema_fields=STANDARD_BASELINE_VIEW_FIELDS,
+        requested_standard_cohort_uuid=STANDARD_COHORT_UUID,
+        **_expected_public_digests(rows),
+        observed_at_utc="2026-08-15T00:00:00Z",
+        observed_principal="wrong-principal@example.invalid",
+    )
+
+    with pytest.raises(ValueError, match="model-reader identity"):
+        module.prepare_standard_dataset_handoff(
+            rows=rows,
+            readiness_receipt=receipt,
+            **_expected_public_digests(rows),
+        )
 
 
 def test_reader_uses_bound_uuid_and_only_standard_authorized_view(tmp_path: Path) -> None:

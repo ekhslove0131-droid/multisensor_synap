@@ -76,6 +76,9 @@ from multisensor_ml.settings import (
     load_phase3_config,
     load_training_registry_config,
 )
+from multisensor_ml.standard_baseline_bigquery import (
+    run_read_only_standard_cohort_reader,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -339,6 +342,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-receipt", type=Path, required=True
     )
     model_platform_cohort.add_argument("--observed-at-utc")
+    model_platform_standard_cohort = model_platform_commands.add_parser(
+        "read-standard-bigquery-cohort"
+    )
+    model_platform_standard_cohort.add_argument(
+        "--standard-cohort-uuid", required=True
+    )
+    model_platform_standard_cohort.add_argument(
+        "--expected-public-cohort-digest", required=True
+    )
+    model_platform_standard_cohort.add_argument(
+        "--expected-public-split-digest", required=True
+    )
+    model_platform_standard_cohort.add_argument(
+        "--output-receipt", type=Path, required=True
+    )
+    model_platform_standard_cohort.add_argument("--observed-at-utc")
 
     phase3 = subparsers.add_parser("phase3")
     phase3_commands = phase3.add_subparsers(dest="phase3_command", required=True)
@@ -407,6 +426,26 @@ def main(argv: list[str] | None = None) -> int:
                 receipt=str(args.output_receipt.resolve()),
             )
             return 0 if cohort_receipt["training_ready"] is True else 2
+        if args.model_platform_command == "read-standard-bigquery-cohort":
+            standard_receipt = run_read_only_standard_cohort_reader(
+                args.output_receipt,
+                standard_cohort_uuid=args.standard_cohort_uuid,
+                expected_public_cohort_digest=args.expected_public_cohort_digest,
+                expected_public_split_digest=args.expected_public_split_digest,
+                observed_at_utc=observed_at,
+                observed_principal=principal,
+            )
+            _emit(
+                status=standard_receipt["status"],
+                standard_cohort_uuid=standard_receipt["standard_cohort_uuid"],
+                row_count=standard_receipt["row_count"],
+                training_ready=standard_receipt["training_ready"],
+                fit_call_count=standard_receipt["fit_call_count"],
+                training_status=standard_receipt["training_status"],
+                evaluation_status=standard_receipt["evaluation_status"],
+                receipt=str(args.output_receipt.resolve()),
+            )
+            return 0 if standard_receipt["training_ready"] is True else 2
         raise AssertionError(
             f"unhandled model-platform command: {args.model_platform_command}"
         )
