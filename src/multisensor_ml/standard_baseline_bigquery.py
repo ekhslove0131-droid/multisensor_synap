@@ -68,6 +68,13 @@ STANDARD_CANDIDATE_LINEAGE_VERSION: Final[str] = (
 STANDARD_TARGET_LEAKAGE_AUDIT_VERSION: Final[str] = (
     "kidsignal-standard-target-leakage-audit/v1"
 )
+STANDARD_TRAINING_PROJECTION_VERSION: Final[str] = (
+    "kidsignal-standard-training-projection/v1"
+)
+STANDARD_LEAKAGE_PROBE_CASE_IDS: Final[tuple[str, str]] = (
+    "target-source-base",
+    "target-source-mutated",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,6 +396,125 @@ def build_standard_candidate_bundle_lineage(
         "evaluation_status": "NOT EVALUABLE",
         "fit_call_count": 0,
     }
+
+
+def build_standard_training_projection(
+    prepared: PreparedStandardDataset,
+) -> dict[str, object]:
+    """Describe the mandatory 16-to-15 projection for a future ONNX export.
+
+    This creates contract metadata only. It does not fit a model, write an
+    artifact, or prove that a particular ONNX graph embeds the projection.
+    The immutable-bundle verifier performs that final graph/output check.
+    """
+
+    leakage_audit = audit_standard_target_leakage(prepared)
+    return {
+        "schema_version": STANDARD_TRAINING_PROJECTION_VERSION,
+        "task": prepared.task,
+        "trainer_entrypoint": prepared.trainer_entrypoint,
+        "feature_schema_uuid": prepared.feature_schema_uuid,
+        "feature_schema_hash": prepared.feature_schema_hash,
+        "feature_names": list(prepared.feature_names),
+        "runtime_input_shape": ["N", len(prepared.feature_names)],
+        "trainer_feature_names": list(prepared.trainer_feature_names),
+        "trainer_input_shape": ["N", len(prepared.trainer_feature_names)],
+        "runtime_to_trainer_indices": list(prepared.runtime_to_trainer_indices),
+        "target_name": TARGET_NAME,
+        "target_unit": TARGET_UNIT,
+        "target_source_feature": prepared.target_source_feature,
+        "target_source_runtime_index": prepared.target_source_runtime_index,
+        "target_leakage_policy": leakage_audit["policy"],
+        "target_leakage_status": leakage_audit["status"],
+        "onnx_input_shape": ["N", len(prepared.feature_names)],
+        "projection_embedded_in_onnx": True,
+        "leakage_probe_case_ids": list(STANDARD_LEAKAGE_PROBE_CASE_IDS),
+    }
+
+
+def project_standard_runtime_features(
+    runtime_features: Sequence[Sequence[object]] | np.ndarray,
+) -> np.ndarray:
+    """Apply the exact projection that a standard-model ONNX must embed."""
+
+    values = np.asarray(runtime_features, dtype=np.float32)
+    if values.ndim != 2 or values.shape[1] != len(FEATURE_NAMES):
+        raise ValueError("standard runtime input must have shape [N,16]")
+    if not bool(np.isfinite(values).all()):
+        raise ValueError("standard runtime input must contain finite values")
+    projected = values[:, RUNTIME_TO_TRAINER_INDICES].copy()
+    projected.setflags(write=False)
+    return projected
+
+
+def build_standard_leakage_probe_fixture_cases(
+    base_feature_values: Mapping[str, object],
+    *,
+    mutated_target_value: float,
+) -> list[dict[str, object]]:
+    """Build the two INFER cases used to detect direct target leakage."""
+
+    if set(base_feature_values) != set(FEATURE_NAMES):
+        raise ValueError("leakage probe must contain the canonical 16 features")
+    try:
+        base = {
+            name: float(
+                cast(float | int | str, base_feature_values[name])
+            )
+            for name in FEATURE_NAMES
+        }
+        mutated_value = float(mutated_target_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("leakage probe features must be numeric") from error
+    if not all(math.isfinite(value) for value in base.values()) or not math.isfinite(
+        mutated_value
+    ):
+        raise ValueError("leakage probe features must be finite")
+    if mutated_value == base[TARGET_SOURCE_FEATURE]:
+        raise ValueError("leakage probe target source must change")
+    mutated = dict(base)
+    mutated[TARGET_SOURCE_FEATURE] = mutated_value
+    cases: list[dict[str, object]] = []
+    for case_id, values in zip(
+        STANDARD_LEAKAGE_PROBE_CASE_IDS,
+        (base, mutated),
+        strict=True,
+    ):
+        cases.append(
+            {
+                "case_id": case_id,
+                "feature_values": values,
+                "expected_input_vector": [values[name] for name in FEATURE_NAMES],
+                "expected_runtime_action": "INFER",
+                "expected_reason": None,
+            }
+        )
+    return cases
+
+
+def build_standard_leakage_probe_output_cases(
+    *,
+    base_prediction: float,
+    mutated_prediction: float,
+) -> list[dict[str, object]]:
+    """Build golden outputs only after both projected inputs predict identically."""
+
+    base = float(base_prediction)
+    mutated = float(mutated_prediction)
+    if not math.isfinite(base) or not math.isfinite(mutated):
+        raise ValueError("leakage probe predictions must be finite")
+    if base != mutated:
+        raise ValueError("leakage probe ONNX must return an identical prediction")
+    return [
+        {
+            "case_id": case_id,
+            "expected_runtime_action": "INFER",
+            "expected_output": [[base]],
+            "expected_status": "PREDICTED",
+            "expected_reason": None,
+        }
+        for case_id in STANDARD_LEAKAGE_PROBE_CASE_IDS
+    ]
 
 
 def audit_standard_target_leakage(

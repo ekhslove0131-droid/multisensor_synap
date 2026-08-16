@@ -551,6 +551,113 @@ def test_target_leakage_audit_rejects_reintroduced_target_source_feature() -> No
         module.audit_standard_target_leakage(unsafe)
 
 
+def test_standard_training_projection_matches_cloud_bundle_contract() -> None:
+    import multisensor_ml.standard_baseline_bigquery as module
+
+    rows = _rows()
+    receipt = build_standard_cohort_readiness_receipt(
+        rows=rows,
+        schema_fields=STANDARD_BASELINE_VIEW_FIELDS,
+        requested_standard_cohort_uuid=STANDARD_COHORT_UUID,
+        **_expected_public_digests(rows),
+        observed_at_utc="2026-08-15T00:00:00Z",
+        observed_principal=EXPECTED_MODEL_READER,
+    )
+    prepared = module.prepare_standard_dataset_handoff(
+        rows=rows,
+        readiness_receipt=receipt,
+        **_expected_public_digests(rows),
+    )
+
+    assert module.build_standard_training_projection(prepared) == {
+        "schema_version": "kidsignal-standard-training-projection/v1",
+        "task": "stable_standard_regression",
+        "trainer_entrypoint": "stable_standard_hourly_regression",
+        "feature_schema_uuid": WATCH_SCHEMA_UUID,
+        "feature_schema_hash": WATCH_SCHEMA_HASH,
+        "feature_names": list(FEATURE_NAMES),
+        "runtime_input_shape": ["N", 16],
+        "trainer_feature_names": list(prepared.trainer_feature_names),
+        "trainer_input_shape": ["N", 15],
+        "runtime_to_trainer_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            12,
+            13,
+            14,
+            15,
+        ],
+        "target_name": "no_pattern_median",
+        "target_unit": "positive_robust_z",
+        "target_source_feature": "watch_load_median_300",
+        "target_source_runtime_index": 11,
+        "target_leakage_policy": "exclude_exact_target_source_v1",
+        "target_leakage_status": "DIRECT_TARGET_SOURCE_EXCLUDED",
+        "onnx_input_shape": ["N", 16],
+        "projection_embedded_in_onnx": True,
+        "leakage_probe_case_ids": [
+            "target-source-base",
+            "target-source-mutated",
+        ],
+    }
+
+
+def test_standard_runtime_projection_and_golden_probe_ignore_target_source() -> None:
+    import multisensor_ml.standard_baseline_bigquery as module
+
+    base_values = {
+        name: float(index + 1) / 10.0
+        for index, name in enumerate(FEATURE_NAMES)
+    }
+    mutated_values = dict(base_values)
+    mutated_values["watch_load_median_300"] = 9.99
+    runtime_rows = [
+        [base_values[name] for name in FEATURE_NAMES],
+        [mutated_values[name] for name in FEATURE_NAMES],
+    ]
+
+    projected = module.project_standard_runtime_features(runtime_rows)
+    assert projected.shape == (2, 15)
+    assert projected[0].tolist() == projected[1].tolist()
+
+    fixture_cases = module.build_standard_leakage_probe_fixture_cases(
+        base_values,
+        mutated_target_value=9.99,
+    )
+    assert [case["case_id"] for case in fixture_cases] == [
+        "target-source-base",
+        "target-source-mutated",
+    ]
+    assert all(case["expected_runtime_action"] == "INFER" for case in fixture_cases)
+    changed = [
+        name
+        for name in FEATURE_NAMES
+        if fixture_cases[0]["feature_values"][name]
+        != fixture_cases[1]["feature_values"][name]
+    ]
+    assert changed == ["watch_load_median_300"]
+
+    output_cases = module.build_standard_leakage_probe_output_cases(
+        base_prediction=0.42,
+        mutated_prediction=0.42,
+    )
+    assert output_cases[0]["expected_output"] == output_cases[1]["expected_output"]
+    with pytest.raises(ValueError, match="identical prediction"):
+        module.build_standard_leakage_probe_output_cases(
+            base_prediction=0.42,
+            mutated_prediction=0.43,
+        )
+
+
 def test_reader_uses_bound_uuid_and_only_standard_authorized_view(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
