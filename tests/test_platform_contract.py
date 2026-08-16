@@ -103,6 +103,158 @@ def test_platform_contract_has_three_separate_sensor_variants_and_temporal_stage
     assert contract["locked_holdout"]["evaluator"] == "SEALED_EVALUATOR"
 
 
+def test_watch_exact_composition_v3_locks_stream_roles_and_timing() -> None:
+    contract = platform_contract.watch_exact_composition_v3_contract()
+
+    assert contract["contract_version"] == "kidsignal-watch-exact-composition/v3"
+    assert contract["logical_source"] == "watch"
+    assert contract["core_streams"] == ["hr_ibi", "eda", "accelerometer"]
+    assert contract["optional_streams"] == ["ppg", "skin_temperature"]
+    assert contract["hr_ibi_policy"] == {
+        "hr_coverage_required": True,
+        "ibi_lineage_preserved": True,
+        "ibi_runtime_feature": False,
+        "ibi_trainer_feature": False,
+        "ibi_separate_core_value_gate": False,
+    }
+    assert contract["interval"] == {
+        "duration_ms": 10_000,
+        "alignment": "FLOOR_CORRECTED_UTC",
+        "non_overlapping": True,
+    }
+    assert contract["deadlines"] == {
+        "ready_watermark_after_end_ms": 5_000,
+        "terminal_reject_after_end_ms": 30_000,
+    }
+    assert contract["forbidden_transforms"] == [
+        "interpolation",
+        "resampling",
+        "padding",
+        "numeric_zero_substitution",
+        "null_as_normal",
+        "hold_forward",
+    ]
+    assert contract["non_v3_sources"] == {
+        "h10": "SEPARATE_EXISTING_V1_NOT_PROMOTED",
+        "muse_s": "NOT_RUNTIME_TRAINING_READY",
+    }
+    assert platform_contract.validate_watch_exact_composition_v3_contract(contract)[
+        "status"
+    ] == "VALID"
+    assert platform_contract.watch_exact_composition_v3_interval(27_345) == {
+        "interval_start_ms": 20_000,
+        "interval_end_ms": 30_000,
+        "ready_watermark_ms": 35_000,
+        "terminal_reject_deadline_ms": 60_000,
+    }
+    watch_source = platform_contract.source_schema("galaxy_watch8")
+    assert "exact_composition_v3" not in watch_source
+    assert watch_source["sha256"] == (
+        "95bea255e39fc7a46403169042b6ff8a64e100398b345bfa2f8e0bb6309e49d8"
+    )
+    assert hashlib.sha256(
+        str(watch_source["canonical_json"]).encode("utf-8")
+    ).hexdigest() == watch_source["sha256"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "stream_role",
+        "ibi_feature",
+        "ibi_trainer_feature",
+        "interval",
+        "ready_watermark",
+        "terminal_deadline",
+        "fill_policy",
+    ],
+)
+def test_watch_exact_composition_v3_rejects_contract_drift(mutation: str) -> None:
+    contract = json.loads(
+        json.dumps(platform_contract.watch_exact_composition_v3_contract())
+    )
+    if mutation == "stream_role":
+        contract["core_streams"] = ["hr", "eda", "accelerometer"]
+    elif mutation == "ibi_feature":
+        contract["hr_ibi_policy"]["ibi_runtime_feature"] = True
+    elif mutation == "ibi_trainer_feature":
+        contract["hr_ibi_policy"]["ibi_trainer_feature"] = True
+    elif mutation == "interval":
+        contract["interval"]["duration_ms"] = 9_999
+    elif mutation == "ready_watermark":
+        contract["deadlines"]["ready_watermark_after_end_ms"] = 4_999
+    elif mutation == "terminal_deadline":
+        contract["deadlines"]["terminal_reject_after_end_ms"] = 29_999
+    elif mutation == "fill_policy":
+        contract["forbidden_transforms"].remove("hold_forward")
+    else:  # pragma: no cover - fixed parametrization
+        raise AssertionError(mutation)
+
+    with pytest.raises(ValueError, match="exact-composition v3 contract drift"):
+        platform_contract.validate_watch_exact_composition_v3_contract(contract)
+
+
+def test_watch_v3_keeps_learning_planes_and_target_leakage_gates_separate() -> None:
+    from multisensor_ml.bigquery_training_preflight import (
+        AUTHORIZED_TRAINING_VIEW,
+        EXPECTED_VIEW_FIELDS,
+    )
+    from multisensor_ml.observational_contract import FEATURE_NAMES
+    from multisensor_ml.standard_baseline_bigquery import (
+        RUNTIME_TO_TRAINER_INDICES,
+        STANDARD_BASELINE_AUTHORIZED_VIEW,
+        STANDARD_BASELINE_VIEW_FIELDS,
+        STANDARD_LEAKAGE_PROBE_CASE_IDS,
+        STANDARD_TRAINER_FEATURE_NAMES,
+        TARGET_SOURCE_FEATURE,
+        project_standard_runtime_features,
+    )
+
+    assert len(STANDARD_BASELINE_VIEW_FIELDS) == 24
+    assert len(EXPECTED_VIEW_FIELDS) == 26
+    assert STANDARD_BASELINE_AUTHORIZED_VIEW.endswith(
+        "standard_baseline_train_validation_v1"
+    )
+    assert AUTHORIZED_TRAINING_VIEW.endswith("training_examples_train_validation_v1")
+    assert STANDARD_BASELINE_AUTHORIZED_VIEW != AUTHORIZED_TRAINING_VIEW
+    assert "label_schema_digest" not in STANDARD_BASELINE_VIEW_FIELDS
+    assert "label_schema_digest" not in EXPECTED_VIEW_FIELDS
+
+    assert len(FEATURE_NAMES) == 16
+    assert len(STANDARD_TRAINER_FEATURE_NAMES) == 15
+    assert all("ibi" not in name.lower() for name in FEATURE_NAMES)
+    assert all("ibi" not in name.lower() for name in STANDARD_TRAINER_FEATURE_NAMES)
+    assert TARGET_SOURCE_FEATURE == "watch_load_median_300"
+    assert TARGET_SOURCE_FEATURE not in STANDARD_TRAINER_FEATURE_NAMES
+    assert RUNTIME_TO_TRAINER_INDICES == (
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        12,
+        13,
+        14,
+        15,
+    )
+    assert STANDARD_LEAKAGE_PROBE_CASE_IDS == (
+        "target-source-base",
+        "target-source-mutated",
+    )
+    runtime = np.arange(32, dtype=np.float32).reshape(2, 16)
+    runtime[1] = runtime[0]
+    runtime[1, 11] = 999.0
+    projected = project_standard_runtime_features(runtime)
+    assert projected.shape == (2, 15)
+    assert np.array_equal(projected[0], projected[1])
+
+
 @pytest.mark.parametrize("variant", SENSOR_VARIANTS)
 def test_feature_schema_is_hash_closed_and_requires_only_its_source_set(variant: str) -> None:
     schema = feature_schema_for_variant(variant)

@@ -42,6 +42,18 @@ LABEL_REVIEW_CONTRACT_VERSION: Final[str] = "kidsignal-label-review/v1"
 SOURCE_SCHEMA_VERSION: Final[str] = "kidsignal-source-schema/v1"
 BIGQUERY_CONTRACT_VERSION: Final[str] = "kidsignal-bigquery-training-input/v1"
 BASELINE_CONTRACT_VERSION: Final[str] = "personal_robust_baseline_900_eligible_v2"
+WATCH_EXACT_COMPOSITION_V3_VERSION: Final[str] = (
+    "kidsignal-watch-exact-composition/v3"
+)
+WATCH_EXACT_COMPOSITION_V3_UPSTREAM_COMMIT: Final[str] = (
+    "bf48cd4abc61c5abf72d855237f482885e928f3c"
+)
+WATCH_EXACT_COMPOSITION_V3_IMPLEMENTATION_COMMIT: Final[str] = (
+    "30498acd6d0f232449af9f9750f2b98e58f86aec"
+)
+WATCH_EXACT_INTERVAL_MS: Final[int] = 10_000
+WATCH_EXACT_READY_AFTER_END_MS: Final[int] = 5_000
+WATCH_EXACT_TERMINAL_AFTER_END_MS: Final[int] = 30_000
 
 SENSOR_VARIANTS: Final[tuple[str, ...]] = (
     "watch_only",
@@ -215,6 +227,80 @@ def _hash_closed_schema(body: Mapping[str, object]) -> dict[str, object]:
         **body,
         "canonical_json": serialized,
         "sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+    }
+
+
+def watch_exact_composition_v3_contract() -> dict[str, object]:
+    """Return the immutable Watch-only exact-composition intake contract."""
+
+    body: dict[str, object] = {
+        "contract_version": WATCH_EXACT_COMPOSITION_V3_VERSION,
+        "upstream_contract_commit": WATCH_EXACT_COMPOSITION_V3_UPSTREAM_COMMIT,
+        "upstream_implementation_commit": (
+            WATCH_EXACT_COMPOSITION_V3_IMPLEMENTATION_COMMIT
+        ),
+        "logical_source": "watch",
+        "core_streams": ["hr_ibi", "eda", "accelerometer"],
+        "optional_streams": ["ppg", "skin_temperature"],
+        "hr_ibi_policy": {
+            "hr_coverage_required": True,
+            "ibi_lineage_preserved": True,
+            "ibi_runtime_feature": False,
+            "ibi_trainer_feature": False,
+            "ibi_separate_core_value_gate": False,
+        },
+        "interval": {
+            "duration_ms": WATCH_EXACT_INTERVAL_MS,
+            "alignment": "FLOOR_CORRECTED_UTC",
+            "non_overlapping": True,
+        },
+        "deadlines": {
+            "ready_watermark_after_end_ms": WATCH_EXACT_READY_AFTER_END_MS,
+            "terminal_reject_after_end_ms": WATCH_EXACT_TERMINAL_AFTER_END_MS,
+        },
+        "forbidden_transforms": [
+            "interpolation",
+            "resampling",
+            "padding",
+            "numeric_zero_substitution",
+            "null_as_normal",
+            "hold_forward",
+        ],
+        "non_v3_sources": {
+            "h10": "SEPARATE_EXISTING_V1_NOT_PROMOTED",
+            "muse_s": "NOT_RUNTIME_TRAINING_READY",
+        },
+    }
+    return _hash_closed_schema(body)
+
+
+def validate_watch_exact_composition_v3_contract(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    """Fail closed if any v3 intake role, timing, or fill policy drifts."""
+
+    expected = watch_exact_composition_v3_contract()
+    if dict(value) != expected:
+        raise ValueError("watch exact-composition v3 contract drift")
+    return {
+        "status": "VALID",
+        "contract_version": WATCH_EXACT_COMPOSITION_V3_VERSION,
+        "sha256": expected["sha256"],
+    }
+
+
+def watch_exact_composition_v3_interval(corrected_utc_ms: int) -> dict[str, int]:
+    """Calculate one floor-aligned, non-overlapping corrected-time interval."""
+
+    if type(corrected_utc_ms) is not int or corrected_utc_ms < 0:
+        raise ValueError("corrected_utc_ms must be a non-negative integer")
+    start = (corrected_utc_ms // WATCH_EXACT_INTERVAL_MS) * WATCH_EXACT_INTERVAL_MS
+    end = start + WATCH_EXACT_INTERVAL_MS
+    return {
+        "interval_start_ms": start,
+        "interval_end_ms": end,
+        "ready_watermark_ms": end + WATCH_EXACT_READY_AFTER_END_MS,
+        "terminal_reject_deadline_ms": end + WATCH_EXACT_TERMINAL_AFTER_END_MS,
     }
 
 
