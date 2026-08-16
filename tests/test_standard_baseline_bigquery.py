@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 from subprocess import CompletedProcess
 from uuid import NAMESPACE_URL, uuid5
@@ -378,12 +379,56 @@ def test_validated_standard_rows_prepare_typed_trainer_inputs_without_fit() -> N
 
     assert prepared.task == "stable_standard_regression"
     assert prepared.feature_names == tuple(FEATURE_NAMES)
-    assert prepared.train_features.shape == (1, len(FEATURE_NAMES))
-    assert prepared.validation_features.shape == (1, len(FEATURE_NAMES))
+    assert prepared.runtime_train_features.shape == (1, 16)
+    assert prepared.runtime_validation_features.shape == (1, 16)
+    assert prepared.train_features.shape == (1, 15)
+    assert prepared.validation_features.shape == (1, 15)
     assert prepared.train_features.dtype.name == "float32"
     assert prepared.train_targets.dtype.name == "float32"
     assert prepared.train_targets.tolist() == [0.25]
     assert prepared.validation_targets.tolist() == [0.75]
+    assert prepared.target_source_feature == "watch_load_median_300"
+    assert prepared.target_source_runtime_index == 11
+    assert prepared.trainer_feature_names == (
+        "watch_eda_z",
+        "watch_hr_z",
+        "watch_motion_z",
+        "watch_load_raw",
+        "watch_eda_mean_30",
+        "watch_hr_mean_30",
+        "watch_motion_mean_30",
+        "watch_eda_slope_60",
+        "watch_hr_slope_60",
+        "watch_motion_slope_60",
+        "watch_load_std_60",
+        "watch_load_ema_1800",
+        "watch_load_ema_21600",
+        "quality_confidence",
+        "watch_ineligible_fraction_60",
+    )
+    assert prepared.runtime_to_trainer_indices == (
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        12,
+        13,
+        14,
+        15,
+    )
+    assert prepared.runtime_train_features[0, 11] == prepared.train_targets[0]
+    assert (
+        prepared.runtime_validation_features[0, 11]
+        == prepared.validation_targets[0]
+    )
+    assert prepared.target_leakage_status == "DIRECT_TARGET_SOURCE_EXCLUDED"
     assert prepared.train_subject_groups == prepared.validation_subject_groups
     assert prepared.public_cohort_digest == rows[0]["public_cohort_digest"]
     assert prepared.public_split_digest == rows[0]["public_split_digest"]
@@ -412,6 +457,14 @@ def test_validated_standard_rows_prepare_typed_trainer_inputs_without_fit() -> N
         "feature_schema_uuid": WATCH_SCHEMA_UUID,
         "feature_schema_hash": WATCH_SCHEMA_HASH,
         "feature_names": list(FEATURE_NAMES),
+        "runtime_input_shape": [None, 16],
+        "trainer_feature_names": list(prepared.trainer_feature_names),
+        "trainer_input_shape": [None, 15],
+        "runtime_to_trainer_indices": list(prepared.runtime_to_trainer_indices),
+        "target_source_feature": "watch_load_median_300",
+        "target_source_runtime_index": 11,
+        "target_leakage_policy": "exclude_exact_target_source_v1",
+        "target_leakage_status": "DIRECT_TARGET_SOURCE_EXCLUDED",
         "split_policy": "CHRONOLOGICAL_PER_SUBJECT",
         "purge_seconds": 1800,
         "eligibility_policy": "ELIGIBLE_NO_PATTERN_REAL",
@@ -424,7 +477,26 @@ def test_validated_standard_rows_prepare_typed_trainer_inputs_without_fit() -> N
         "delivery_eligible": False,
         "promotion_eligible": False,
         "model_status": "NOT_TRAINED",
+        "model_artifact_created": False,
+        "artifact_creation_gate": "REAL_FROZEN_COHORT_REQUIRED",
         "evaluation_status": "NOT EVALUABLE",
+        "fit_call_count": 0,
+    }
+
+    leakage_audit = module.audit_standard_target_leakage(prepared)
+    assert leakage_audit == {
+        "schema_version": "kidsignal-standard-target-leakage-audit/v1",
+        "target_name": "no_pattern_median",
+        "target_source_feature": "watch_load_median_300",
+        "target_source_runtime_index": 11,
+        "runtime_feature_count": 16,
+        "trainer_feature_count": 15,
+        "source_equals_target_in_train": True,
+        "source_equals_target_in_validation": True,
+        "source_present_in_runtime_contract": True,
+        "source_present_in_trainer_input": False,
+        "policy": "exclude_exact_target_source_v1",
+        "status": "DIRECT_TARGET_SOURCE_EXCLUDED",
         "fit_call_count": 0,
     }
 
@@ -448,6 +520,35 @@ def test_prepared_standard_dataset_requires_verified_reader_receipt() -> None:
             readiness_receipt=receipt,
             **_expected_public_digests(rows),
         )
+
+
+def test_target_leakage_audit_rejects_reintroduced_target_source_feature() -> None:
+    import multisensor_ml.standard_baseline_bigquery as module
+
+    rows = _rows()
+    receipt = build_standard_cohort_readiness_receipt(
+        rows=rows,
+        schema_fields=STANDARD_BASELINE_VIEW_FIELDS,
+        requested_standard_cohort_uuid=STANDARD_COHORT_UUID,
+        **_expected_public_digests(rows),
+        observed_at_utc="2026-08-15T00:00:00Z",
+        observed_principal=EXPECTED_MODEL_READER,
+    )
+    prepared = module.prepare_standard_dataset_handoff(
+        rows=rows,
+        readiness_receipt=receipt,
+        **_expected_public_digests(rows),
+    )
+    unsafe = replace(
+        prepared,
+        trainer_feature_names=tuple(FEATURE_NAMES),
+        runtime_to_trainer_indices=tuple(range(16)),
+        train_features=prepared.runtime_train_features,
+        validation_features=prepared.runtime_validation_features,
+    )
+
+    with pytest.raises(ValueError, match="direct target leakage feature"):
+        module.audit_standard_target_leakage(unsafe)
 
 
 def test_reader_uses_bound_uuid_and_only_standard_authorized_view(tmp_path: Path) -> None:

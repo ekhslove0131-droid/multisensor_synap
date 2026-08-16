@@ -51,9 +51,22 @@ SUPPORTED_STANDARD_VERSION: Final[str] = "stable-stress-standard-v1"
 ELIGIBILITY_POLICY: Final[str] = "ELIGIBLE_NO_PATTERN_REAL"
 TARGET_NAME: Final[str] = "no_pattern_median"
 TARGET_UNIT: Final[str] = "positive_robust_z"
+TARGET_SOURCE_FEATURE: Final[str] = "watch_load_median_300"
+TARGET_SOURCE_RUNTIME_INDEX: Final[int] = FEATURE_NAMES.index(TARGET_SOURCE_FEATURE)
+TARGET_LEAKAGE_POLICY: Final[str] = "exclude_exact_target_source_v1"
+TARGET_LEAKAGE_STATUS: Final[str] = "DIRECT_TARGET_SOURCE_EXCLUDED"
+STANDARD_TRAINER_FEATURE_NAMES: Final[tuple[str, ...]] = tuple(
+    name for name in FEATURE_NAMES if name != TARGET_SOURCE_FEATURE
+)
+RUNTIME_TO_TRAINER_INDICES: Final[tuple[int, ...]] = tuple(
+    index for index, name in enumerate(FEATURE_NAMES) if name != TARGET_SOURCE_FEATURE
+)
 STANDARD_TRAINER_ENTRYPOINT: Final[str] = "stable_standard_hourly_regression"
 STANDARD_CANDIDATE_LINEAGE_VERSION: Final[str] = (
     "kidsignal-standard-candidate-lineage/v1"
+)
+STANDARD_TARGET_LEAKAGE_AUDIT_VERSION: Final[str] = (
+    "kidsignal-standard-target-leakage-audit/v1"
 )
 
 
@@ -76,11 +89,18 @@ class PreparedStandardDataset:
     purge_seconds: int
     eligibility_policy: str
     feature_names: tuple[str, ...]
+    trainer_feature_names: tuple[str, ...]
+    runtime_to_trainer_indices: tuple[int, ...]
+    target_source_feature: str
+    target_source_runtime_index: int
+    target_leakage_status: str
+    runtime_train_features: np.ndarray
     train_features: np.ndarray
     train_targets: np.ndarray
     train_subject_groups: tuple[str, ...]
     train_sequence_groups: tuple[str, ...]
     train_row_ids: tuple[str, ...]
+    runtime_validation_features: np.ndarray
     validation_features: np.ndarray
     validation_targets: np.ndarray
     validation_subject_groups: tuple[str, ...]
@@ -201,6 +221,7 @@ def prepare_standard_dataset_handoff(
     ) -> tuple[
         np.ndarray,
         np.ndarray,
+        np.ndarray,
         tuple[str, ...],
         tuple[str, ...],
         tuple[str, ...],
@@ -208,7 +229,7 @@ def prepare_standard_dataset_handoff(
         selected = [row for row in handoff_rows if row["split_role"] == split]
         if not selected:
             raise ValueError(f"{split} support is required")
-        features = np.asarray(
+        runtime_features = np.asarray(
             [
                 [
                     cast(Mapping[str, object], row["feature_values"])[name]
@@ -218,13 +239,16 @@ def prepare_standard_dataset_handoff(
             ],
             dtype=np.float32,
         )
+        trainer_features = runtime_features[:, RUNTIME_TO_TRAINER_INDICES].copy()
         targets = np.asarray(
             [row["target_value"] for row in selected], dtype=np.float32
         )
-        features.setflags(write=False)
+        runtime_features.setflags(write=False)
+        trainer_features.setflags(write=False)
         targets.setflags(write=False)
         return (
-            features,
+            runtime_features,
+            trainer_features,
             targets,
             tuple(str(row["training_subject_uuid"]) for row in selected),
             tuple(str(row["training_capture_set_uuid"]) for row in selected),
@@ -249,16 +273,23 @@ def prepare_standard_dataset_handoff(
         purge_seconds=int(cast(int, handoff["purge_seconds"])),
         eligibility_policy=str(handoff["eligibility_policy"]),
         feature_names=tuple(FEATURE_NAMES),
-        train_features=train[0],
-        train_targets=train[1],
-        train_subject_groups=train[2],
-        train_sequence_groups=train[3],
-        train_row_ids=train[4],
-        validation_features=validation[0],
-        validation_targets=validation[1],
-        validation_subject_groups=validation[2],
-        validation_sequence_groups=validation[3],
-        validation_row_ids=validation[4],
+        trainer_feature_names=STANDARD_TRAINER_FEATURE_NAMES,
+        runtime_to_trainer_indices=RUNTIME_TO_TRAINER_INDICES,
+        target_source_feature=TARGET_SOURCE_FEATURE,
+        target_source_runtime_index=TARGET_SOURCE_RUNTIME_INDEX,
+        target_leakage_status=TARGET_LEAKAGE_STATUS,
+        runtime_train_features=train[0],
+        train_features=train[1],
+        train_targets=train[2],
+        train_subject_groups=train[3],
+        train_sequence_groups=train[4],
+        train_row_ids=train[5],
+        runtime_validation_features=validation[0],
+        validation_features=validation[1],
+        validation_targets=validation[2],
+        validation_subject_groups=validation[3],
+        validation_sequence_groups=validation[4],
+        validation_row_ids=validation[5],
     )
 
 
@@ -318,6 +349,7 @@ def build_standard_candidate_bundle_lineage(
         raise ValueError("prepared standard dataset must precede fitting")
     if prepared.feature_names != tuple(FEATURE_NAMES):
         raise ValueError("prepared standard feature order is not canonical")
+    leakage_audit = audit_standard_target_leakage(prepared)
     return {
         "schema_version": STANDARD_CANDIDATE_LINEAGE_VERSION,
         "task": prepared.task,
@@ -332,6 +364,14 @@ def build_standard_candidate_bundle_lineage(
         "feature_schema_uuid": prepared.feature_schema_uuid,
         "feature_schema_hash": prepared.feature_schema_hash,
         "feature_names": list(prepared.feature_names),
+        "runtime_input_shape": [None, len(prepared.feature_names)],
+        "trainer_feature_names": list(prepared.trainer_feature_names),
+        "trainer_input_shape": [None, len(prepared.trainer_feature_names)],
+        "runtime_to_trainer_indices": list(prepared.runtime_to_trainer_indices),
+        "target_source_feature": prepared.target_source_feature,
+        "target_source_runtime_index": prepared.target_source_runtime_index,
+        "target_leakage_policy": leakage_audit["policy"],
+        "target_leakage_status": leakage_audit["status"],
         "split_policy": prepared.split_policy,
         "purge_seconds": prepared.purge_seconds,
         "eligibility_policy": prepared.eligibility_policy,
@@ -344,7 +384,64 @@ def build_standard_candidate_bundle_lineage(
         "delivery_eligible": False,
         "promotion_eligible": False,
         "model_status": "NOT_TRAINED",
+        "model_artifact_created": False,
+        "artifact_creation_gate": "REAL_FROZEN_COHORT_REQUIRED",
         "evaluation_status": "NOT EVALUABLE",
+        "fit_call_count": 0,
+    }
+
+
+def audit_standard_target_leakage(
+    prepared: PreparedStandardDataset,
+) -> dict[str, object]:
+    """Confirm exact target-source exclusion without fitting a model."""
+
+    if prepared.feature_names != tuple(FEATURE_NAMES):
+        raise ValueError("runtime Watch feature order is not canonical")
+    if (
+        prepared.target_source_feature != TARGET_SOURCE_FEATURE
+        or prepared.target_source_runtime_index != TARGET_SOURCE_RUNTIME_INDEX
+    ):
+        raise ValueError("target source identity does not match standard contract")
+    if TARGET_SOURCE_FEATURE in prepared.trainer_feature_names:
+        raise ValueError("direct target leakage feature is present in trainer input")
+    if prepared.trainer_feature_names != STANDARD_TRAINER_FEATURE_NAMES:
+        raise ValueError("trainer feature order does not match leakage policy")
+    if prepared.runtime_to_trainer_indices != RUNTIME_TO_TRAINER_INDICES:
+        raise ValueError("runtime-to-trainer projection does not match leakage policy")
+    projected_names = tuple(
+        prepared.feature_names[index]
+        for index in prepared.runtime_to_trainer_indices
+    )
+    if projected_names != prepared.trainer_feature_names:
+        raise ValueError("runtime-to-trainer projection is inconsistent")
+    train_match = bool(
+        np.array_equal(
+            prepared.runtime_train_features[:, TARGET_SOURCE_RUNTIME_INDEX],
+            prepared.train_targets,
+        )
+    )
+    validation_match = bool(
+        np.array_equal(
+            prepared.runtime_validation_features[:, TARGET_SOURCE_RUNTIME_INDEX],
+            prepared.validation_targets,
+        )
+    )
+    if not train_match or not validation_match:
+        raise ValueError("target source feature does not match standard target contract")
+    return {
+        "schema_version": STANDARD_TARGET_LEAKAGE_AUDIT_VERSION,
+        "target_name": TARGET_NAME,
+        "target_source_feature": TARGET_SOURCE_FEATURE,
+        "target_source_runtime_index": TARGET_SOURCE_RUNTIME_INDEX,
+        "runtime_feature_count": len(FEATURE_NAMES),
+        "trainer_feature_count": len(STANDARD_TRAINER_FEATURE_NAMES),
+        "source_equals_target_in_train": train_match,
+        "source_equals_target_in_validation": validation_match,
+        "source_present_in_runtime_contract": True,
+        "source_present_in_trainer_input": False,
+        "policy": TARGET_LEAKAGE_POLICY,
+        "status": TARGET_LEAKAGE_STATUS,
         "fit_call_count": 0,
     }
 
