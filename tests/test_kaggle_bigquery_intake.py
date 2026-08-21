@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import hashlib
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -20,6 +21,26 @@ STANDARD_COHORT_UUID = "00000000-0000-4000-8000-000000000099"
 MODEL_READER = "kidsignal-model-reader@multi-app-kidsignal-260801.iam.gserviceaccount.com"
 WATCH_SCHEMA_UUID = "9b842d8c-8889-5259-acca-77baa0c7729d"
 WATCH_SCHEMA_HASH = "2857f8a16cd4450a18f8701c1c9c9f397dee4b291fefd2475279883a0f8a29de"
+PROJECT_ROOT = Path(__file__).parents[1]
+NOTEBOOK_BUILDER = PROJECT_ROOT / "scripts/build_kaggle_bigquery_intake_notebook.py"
+
+
+def _build_notebook() -> nbformat.NotebookNode:
+    spec = importlib.util.spec_from_file_location(
+        "kidsignal_kaggle_bigquery_intake_notebook_builder",
+        NOTEBOOK_BUILDER,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load notebook builder: {NOTEBOOK_BUILDER}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    build_notebook = getattr(module, "build_notebook", None)
+    if not callable(build_notebook):
+        raise RuntimeError("notebook builder does not expose build_notebook")
+    notebook = build_notebook()
+    if not isinstance(notebook, nbformat.NotebookNode):
+        raise RuntimeError("notebook builder returned an invalid notebook")
+    return notebook
 
 
 def _sha256_json(value: object) -> str:
@@ -280,8 +301,6 @@ def test_generated_notebook_executes_bounded_sdk_intake_for_both_planes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from scripts.build_kaggle_bigquery_intake_notebook import build_notebook
-
     values = rows()
     client = _Client(values, fields)
     _install_fake_bigquery(monkeypatch, client)
@@ -296,7 +315,7 @@ def test_generated_notebook_executes_bounded_sdk_intake_for_both_planes(
     )
     monkeypatch.setenv("KIDSIGNAL_INTAKE_OUTPUT", str(output))
 
-    _execute_code_cells(build_notebook())
+    _execute_code_cells(_build_notebook())
     artifact = json.loads(output.read_text(encoding="utf-8"))
 
     assert artifact["mode"] == mode
@@ -375,8 +394,6 @@ def test_intake_consumer_blocks_zero_rows_and_schema_mismatch_without_fit(
 def test_notebook_fails_clearly_when_bigquery_sdk_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from scripts.build_kaggle_bigquery_intake_notebook import build_notebook
-
     monkeypatch.setenv("KIDSIGNAL_INTAKE_MODE", "standard")
     monkeypatch.setenv("KIDSIGNAL_COHORT_UUID", STANDARD_COHORT_UUID)
     monkeypatch.setenv("KIDSIGNAL_PUBLIC_COHORT_DIGEST", "a" * 64)
@@ -392,14 +409,12 @@ def test_notebook_fails_clearly_when_bigquery_sdk_is_missing(
     monkeypatch.setattr(builtins, "__import__", blocked_import)
 
     with pytest.raises(RuntimeError, match="google-cloud-bigquery"):
-        _execute_code_cells(build_notebook())
+        _execute_code_cells(_build_notebook())
 
 
 def test_notebook_fails_clearly_when_adc_principal_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from scripts.build_kaggle_bigquery_intake_notebook import build_notebook
-
     values = _standard_rows()
     client = _Client(values, STANDARD_BASELINE_VIEW_FIELDS)
     client._credentials = SimpleNamespace()
@@ -415,14 +430,12 @@ def test_notebook_fails_clearly_when_adc_principal_is_missing(
     monkeypatch.setenv("KIDSIGNAL_INTAKE_OUTPUT", str(tmp_path / "missing-adc.json"))
 
     with pytest.raises(RuntimeError, match="ADC model-reader principal"):
-        _execute_code_cells(build_notebook())
+        _execute_code_cells(_build_notebook())
 
 
 def test_on_disk_notebook_is_generated_and_valid() -> None:
-    from scripts.build_kaggle_bigquery_intake_notebook import build_notebook
-
     path = Path(__file__).parents[1] / "kaggle/10_kidsignal_bigquery_intake.ipynb"
-    generated = build_notebook()
+    generated = _build_notebook()
     actual = nbformat.read(path, as_version=4)
 
     nbformat.validate(generated)
