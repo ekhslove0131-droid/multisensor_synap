@@ -19,6 +19,11 @@ from uuid import UUID
 
 import numpy as np
 
+from multisensor_ml.bigquery_sdk_reader import (
+    BigQueryClientProtocol,
+    QueryJobConfigFactory,
+    execute_read_only_sdk_query,
+)
 from multisensor_ml.observational_contract import FEATURE_NAMES, FEATURE_SCHEMA_SHA256
 
 GCP_PROJECT: Final[str] = "multi-app-kidsignal-260801"
@@ -114,6 +119,14 @@ class PreparedStandardDataset:
     validation_sequence_groups: tuple[str, ...]
     validation_row_ids: tuple[str, ...]
     fit_call_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class StandardSdkCohortReadResult:
+    """SDK receipt plus optional projected trainer input without fitting."""
+
+    receipt: dict[str, object]
+    prepared_dataset: PreparedStandardDataset | None
 
 STANDARD_BASELINE_ENVELOPE_FIELDS: Final[tuple[str, ...]] = (
     "standard_cohort_uuid",
@@ -1111,10 +1124,19 @@ def _parse_rows(stdout: str) -> tuple[dict[str, object], ...]:
         raise ValueError("BigQuery standard cohort output is not JSON") from error
     if not isinstance(value, list):
         raise ValueError("BigQuery standard cohort output must be a list")
-    output: list[dict[str, object]] = []
+    rows: list[Mapping[str, object]] = []
     for index, item in enumerate(value):
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             raise ValueError(f"BigQuery standard cohort row {index} is invalid")
+        rows.append(item)
+    return _normalize_rows(rows)
+
+
+def _normalize_rows(
+    values: Sequence[Mapping[str, object]],
+) -> tuple[dict[str, object], ...]:
+    output: list[dict[str, object]] = []
+    for index, item in enumerate(values):
         row = {str(key): field for key, field in item.items()}
         for field in (
             "purge_seconds",
@@ -1146,11 +1168,100 @@ def _parse_rows(stdout: str) -> tuple[dict[str, object], ...]:
     return tuple(output)
 
 
+def run_read_only_standard_cohort_sdk_reader(
+    *,
+    client: BigQueryClientProtocol,
+    standard_cohort_uuid: str,
+    expected_public_cohort_digest: str,
+    expected_public_split_digest: str,
+    observed_at_utc: str,
+    observed_principal: str,
+    job_config_factory: QueryJobConfigFactory | None = None,
+) -> StandardSdkCohortReadResult:
+    """Read one standard cohort via SDK and preserve the 16-to-15 projection."""
+
+    query_contract = standard_cohort_query_contract(standard_cohort_uuid)
+    cohort_uuid = cast(Mapping[str, object], query_contract["parameter"])["value"]
+    sdk_result = execute_read_only_sdk_query(
+        client=client,
+        query_contract=query_contract,
+        project=GCP_PROJECT,
+        location=GCP_LOCATION,
+        job_config_factory=job_config_factory,
+    )
+    try:
+        fields = _validate_exact_schema(sdk_result.schema_fields)
+    except ValueError as error:
+        return StandardSdkCohortReadResult(
+            receipt=_blocked_receipt(
+                status="BLOCKED_SCHEMA_CONTRACT_MISMATCH",
+                requested_uuid=str(cohort_uuid),
+                observed_at_utc=observed_at_utc,
+                observed_principal=observed_principal,
+                schema_fields=STANDARD_BASELINE_VIEW_FIELDS,
+                row_count=0,
+                blocked_reason=str(error),
+                expected_public_cohort_digest=expected_public_cohort_digest,
+                expected_public_split_digest=expected_public_split_digest,
+            ),
+            prepared_dataset=None,
+        )
+    rows = _normalize_rows(sdk_result.rows)
+    receipt = build_standard_cohort_readiness_receipt(
+        rows=rows,
+        schema_fields=fields,
+        requested_standard_cohort_uuid=str(cohort_uuid),
+        expected_public_cohort_digest=expected_public_cohort_digest,
+        expected_public_split_digest=expected_public_split_digest,
+        observed_at_utc=observed_at_utc,
+        observed_principal=observed_principal,
+    )
+    prepared = None
+    if receipt["training_ready"] is True:
+        prepared = prepare_standard_dataset_handoff(
+            rows=rows,
+            readiness_receipt=receipt,
+            expected_public_cohort_digest=expected_public_cohort_digest,
+            expected_public_split_digest=expected_public_split_digest,
+        )
+    return StandardSdkCohortReadResult(receipt=receipt, prepared_dataset=prepared)
+
+
 def _write_receipt(path: Path, receipt: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("x", encoding="utf-8") as stream:
         json.dump(receipt, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
+
+
+def standard_cohort_query_contract(
+    standard_cohort_uuid: str,
+) -> dict[str, object]:
+    """Return the parameterized authorized-view query shared by CLI and Kaggle."""
+
+    cohort_uuid = _canonical_uuid(
+        standard_cohort_uuid,
+        "standard_cohort_uuid",
+        versions=frozenset({4}),
+    )
+    selected_fields = ", ".join(STANDARD_BASELINE_VIEW_FIELDS)
+    return {
+        "authorized_view": STANDARD_BASELINE_AUTHORIZED_VIEW,
+        "query": (
+            f"SELECT {selected_fields} FROM `{STANDARD_BASELINE_AUTHORIZED_VIEW}` "
+            "WHERE standard_cohort_uuid=@standard_cohort_uuid "
+            "ORDER BY split_role, training_subject_uuid, hour_start_ms, "
+            "standard_hour_uuid"
+        ),
+        "parameter": {
+            "name": "standard_cohort_uuid",
+            "type": "STRING",
+            "value": cohort_uuid,
+        },
+        "field_count": len(STANDARD_BASELINE_VIEW_FIELDS),
+        "locked_access": False,
+        "allowed_transports": ["bq_cli", "google_cloud_bigquery_sdk"],
+    }
 
 
 def run_read_only_standard_cohort_reader(
@@ -1208,20 +1319,16 @@ def run_read_only_standard_cohort_reader(
         )
         _write_receipt(output_receipt, receipt)
         return receipt
-    selected_fields = ", ".join(STANDARD_BASELINE_VIEW_FIELDS)
-    query = (
-        f"SELECT {selected_fields} FROM `{STANDARD_BASELINE_AUTHORIZED_VIEW}` "
-        "WHERE standard_cohort_uuid=@standard_cohort_uuid "
-        "ORDER BY split_role, training_subject_uuid, hour_start_ms, standard_hour_uuid"
-    )
+    query_contract = standard_cohort_query_contract(cohort_uuid)
+    parameter = cast(Mapping[str, object], query_contract["parameter"])
     rows_result = runner(
         [
             *common,
             "query",
             "--use_legacy_sql=false",
             "--format=json",
-            f"--parameter=standard_cohort_uuid:STRING:{cohort_uuid}",
-            query,
+            f"--parameter={parameter['name']}:{parameter['type']}:{parameter['value']}",
+            str(query_contract["query"]),
         ]
     )
     if rows_result.returncode != 0:

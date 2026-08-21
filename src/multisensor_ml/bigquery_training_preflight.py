@@ -14,6 +14,11 @@ from uuid import UUID
 
 import numpy as np
 
+from multisensor_ml.bigquery_sdk_reader import (
+    BigQueryClientProtocol,
+    QueryJobConfigFactory,
+    execute_read_only_sdk_query,
+)
 from multisensor_ml.h10_runtime_contract import canonical_h10_feature_schema
 from multisensor_ml.observational_contract import FEATURE_NAMES
 from multisensor_ml.platform_contract import (
@@ -68,13 +73,28 @@ class PreparedBehaviorDataset:
     fit_call_count: int = 0
 
 
-def _canonical_uuid(value: str, field: str) -> str:
+@dataclass(frozen=True, slots=True)
+class BehaviorSdkCohortReadResult:
+    """SDK receipt plus optional validated trainer input without fitting."""
+
+    receipt: dict[str, object]
+    prepared_dataset: PreparedBehaviorDataset | None
+
+
+def _canonical_uuid(
+    value: str,
+    field: str,
+    *,
+    versions: frozenset[int] | None = None,
+) -> str:
     try:
         parsed = UUID(value)
     except (AttributeError, TypeError, ValueError) as error:
         raise ValueError(f"{field} must be a canonical UUID") from error
     if str(parsed) != value.lower():
         raise ValueError(f"{field} must be a canonical UUID")
+    if versions is not None and parsed.version not in versions:
+        raise ValueError(f"{field} has unsupported UUID version")
     return str(parsed)
 
 
@@ -181,6 +201,8 @@ def _validate_exact_schema(schema_fields: Sequence[str]) -> tuple[str, ...]:
         raise ValueError(f"missing authorized field: {missing[0]}")
     if len(fields) != len(actual):
         raise ValueError("duplicate authorized field")
+    if fields != EXPECTED_VIEW_FIELDS:
+        raise ValueError("authorized field order does not match contract")
     return fields
 
 
@@ -335,7 +357,9 @@ def build_cohort_readiness_receipt(
     """Validate one public cohort without fitting or exposing row content."""
 
     requested_uuid = _canonical_uuid(
-        requested_training_cohort_uuid, "training_cohort_uuid"
+        requested_training_cohort_uuid,
+        "training_cohort_uuid",
+        versions=frozenset({4}),
     )
     fields = _validate_exact_schema(schema_fields)
     expected_cohort_digest = _require_sha256(
@@ -525,10 +549,19 @@ def _parse_authorized_rows(stdout: str) -> tuple[dict[str, object], ...]:
         raise ValueError("BigQuery cohort output is not JSON") from error
     if not isinstance(value, list):
         raise ValueError("BigQuery cohort output must be a list")
-    output: list[dict[str, object]] = []
+    rows: list[Mapping[str, object]] = []
     for index, item in enumerate(value):
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             raise ValueError(f"BigQuery cohort row {index} is invalid")
+        rows.append(item)
+    return _normalize_authorized_rows(rows)
+
+
+def _normalize_authorized_rows(
+    values: Sequence[Mapping[str, object]],
+) -> tuple[dict[str, object], ...]:
+    output: list[dict[str, object]] = []
+    for index, item in enumerate(values):
         row = {str(key): field for key, field in item.items()}
         for field in ("purge_seconds", "window_start_ms", "window_end_ms", "temporal_stage"):
             try:
@@ -548,6 +581,94 @@ def _parse_authorized_rows(stdout: str) -> tuple[dict[str, object], ...]:
     return tuple(output)
 
 
+def run_read_only_behavior_cohort_sdk_reader(
+    *,
+    client: BigQueryClientProtocol,
+    training_cohort_uuid: str,
+    expected_public_cohort_digest: str,
+    expected_public_split_digest: str,
+    observed_at_utc: str,
+    observed_principal: str,
+    job_config_factory: QueryJobConfigFactory | None = None,
+) -> BehaviorSdkCohortReadResult:
+    """Read one behavior cohort via SDK and stop before any model fitting."""
+
+    query_contract = behavior_cohort_query_contract(training_cohort_uuid)
+    cohort_uuid = cast(Mapping[str, object], query_contract["parameter"])["value"]
+    sdk_result = execute_read_only_sdk_query(
+        client=client,
+        query_contract=query_contract,
+        project=GCP_PROJECT,
+        location=GCP_LOCATION,
+        job_config_factory=job_config_factory,
+    )
+    try:
+        fields = _validate_exact_schema(sdk_result.schema_fields)
+    except ValueError as error:
+        return BehaviorSdkCohortReadResult(
+            receipt=_blocked_cohort_receipt(
+                status="BLOCKED_SCHEMA_CONTRACT_MISMATCH",
+                requested_training_cohort_uuid=str(cohort_uuid),
+                observed_at_utc=observed_at_utc,
+                observed_principal=observed_principal,
+                schema_fields=EXPECTED_VIEW_FIELDS,
+                rows=(),
+                blocked_reason=str(error),
+                expected_public_cohort_digest=expected_public_cohort_digest,
+                expected_public_split_digest=expected_public_split_digest,
+            ),
+            prepared_dataset=None,
+        )
+    rows = _normalize_authorized_rows(sdk_result.rows)
+    receipt = build_cohort_readiness_receipt(
+        rows=rows,
+        schema_fields=fields,
+        requested_training_cohort_uuid=str(cohort_uuid),
+        expected_public_cohort_digest=expected_public_cohort_digest,
+        expected_public_split_digest=expected_public_split_digest,
+        observed_at_utc=observed_at_utc,
+        observed_principal=observed_principal,
+    )
+    prepared = None
+    if receipt["training_ready"] is True:
+        prepared = prepare_behavior_dataset_handoff(
+            rows=rows,
+            expected_public_cohort_digest=expected_public_cohort_digest,
+            expected_public_split_digest=expected_public_split_digest,
+        )
+    return BehaviorSdkCohortReadResult(receipt=receipt, prepared_dataset=prepared)
+
+
+def behavior_cohort_query_contract(
+    training_cohort_uuid: str,
+) -> dict[str, object]:
+    """Return the parameterized authorized-view query shared by CLI and Kaggle."""
+
+    cohort_uuid = _canonical_uuid(
+        training_cohort_uuid,
+        "training_cohort_uuid",
+        versions=frozenset({4}),
+    )
+    selected_fields = ", ".join(EXPECTED_VIEW_FIELDS)
+    return {
+        "authorized_view": AUTHORIZED_TRAINING_VIEW,
+        "query": (
+            f"SELECT {selected_fields} FROM `{AUTHORIZED_TRAINING_VIEW}` "
+            "WHERE training_cohort_uuid=@training_cohort_uuid "
+            "ORDER BY split_role, training_subject_uuid, window_start_ms, "
+            "exact_window_id"
+        ),
+        "parameter": {
+            "name": "training_cohort_uuid",
+            "type": "STRING",
+            "value": cohort_uuid,
+        },
+        "field_count": len(EXPECTED_VIEW_FIELDS),
+        "locked_access": False,
+        "allowed_transports": ["bq_cli", "google_cloud_bigquery_sdk"],
+    }
+
+
 def run_read_only_cohort_reader(
     output_receipt: Path,
     *,
@@ -560,7 +681,11 @@ def run_read_only_cohort_reader(
 ) -> dict[str, object]:
     """Read exactly one public cohort with a bound UUID parameter."""
 
-    cohort_uuid = _canonical_uuid(training_cohort_uuid, "training_cohort_uuid")
+    cohort_uuid = _canonical_uuid(
+        training_cohort_uuid,
+        "training_cohort_uuid",
+        versions=frozenset({4}),
+    )
     expected_cohort_digest = _require_sha256(
         expected_public_cohort_digest, "expected_public_cohort_digest"
     )
@@ -600,20 +725,16 @@ def run_read_only_cohort_reader(
             json.dump(receipt, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
         return receipt
-    selected_fields = ", ".join(EXPECTED_VIEW_FIELDS)
-    query = (
-        f"SELECT {selected_fields} FROM `{AUTHORIZED_TRAINING_VIEW}` "
-        "WHERE training_cohort_uuid=@training_cohort_uuid "
-        "ORDER BY split_role, training_subject_uuid, window_start_ms, exact_window_id"
-    )
+    query_contract = behavior_cohort_query_contract(cohort_uuid)
+    parameter = cast(Mapping[str, object], query_contract["parameter"])
     rows_result = runner(
         [
             *common,
             "query",
             "--use_legacy_sql=false",
             "--format=json",
-            f"--parameter=training_cohort_uuid:STRING:{cohort_uuid}",
-            query,
+            f"--parameter={parameter['name']}:{parameter['type']}:{parameter['value']}",
+            str(query_contract["query"]),
         ]
     )
     if rows_result.returncode != 0:

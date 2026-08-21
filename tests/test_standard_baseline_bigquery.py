@@ -136,6 +136,52 @@ class _RowLike:
         return self._values.items()
 
 
+class _SdkSchemaField:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _SdkRowIterator:
+    def __init__(
+        self,
+        rows: list[dict[str, object]],
+        schema_fields: tuple[str, ...] = STANDARD_BASELINE_VIEW_FIELDS,
+    ) -> None:
+        self.schema = tuple(_SdkSchemaField(name) for name in schema_fields)
+        self._rows = tuple(
+            _RowLike({field: row[field] for field in schema_fields}) for row in rows
+        )
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _SdkQueryJob:
+    def __init__(self, rows: _SdkRowIterator) -> None:
+        self._rows = rows
+
+    def result(self) -> _SdkRowIterator:
+        return self._rows
+
+
+class _SdkClient:
+    def __init__(self, rows: _SdkRowIterator) -> None:
+        self._rows = rows
+        self.calls: list[dict[str, object]] = []
+
+    def query(self, query: str, **kwargs: object) -> _SdkQueryJob:
+        self.calls.append({"query": query, **kwargs})
+        return _SdkQueryJob(self._rows)
+
+
+def _sdk_job_config(name: str, parameter_type: str, value: str) -> object:
+    return {
+        "query_parameters": [
+            {"name": name, "type": parameter_type, "value": value}
+        ]
+    }
+
+
 def test_standard_baseline_reader_is_separate_from_behavior_reader() -> None:
     assert importlib.util.find_spec(
         "multisensor_ml.standard_baseline_bigquery"
@@ -697,3 +743,102 @@ def test_reader_uses_bound_uuid_and_only_standard_authorized_view(tmp_path: Path
         f"--parameter=standard_cohort_uuid:STRING:{STANDARD_COHORT_UUID}"
         in calls[1]
     )
+
+
+def test_standard_query_contract_is_transport_neutral_for_kaggle() -> None:
+    import multisensor_ml.standard_baseline_bigquery as module
+
+    contract = module.standard_cohort_query_contract(STANDARD_COHORT_UUID)
+
+    assert contract["authorized_view"] == (
+        "multi-app-kidsignal-260801.kidsignal_model_training."
+        "standard_baseline_train_validation_v1"
+    )
+    assert contract["parameter"] == {
+        "name": "standard_cohort_uuid",
+        "type": "STRING",
+        "value": STANDARD_COHORT_UUID,
+    }
+    assert contract["field_count"] == 24
+    assert contract["locked_access"] is False
+    assert contract["allowed_transports"] == ["bq_cli", "google_cloud_bigquery_sdk"]
+    query = str(contract["query"])
+    assert "standard_cohort_uuid=@standard_cohort_uuid" in query
+    assert "ORDER BY split_role, training_subject_uuid, hour_start_ms" in query
+    assert "training_examples_train_validation_v1" not in query
+    assert "kidsignal_training_private" not in query
+
+
+def test_standard_sdk_reader_binds_query_and_preserves_16_to_15_projection() -> None:
+    import multisensor_ml.standard_baseline_bigquery as module
+
+    rows = _rows()
+    client = _SdkClient(_SdkRowIterator(rows))
+
+    result = module.run_read_only_standard_cohort_sdk_reader(
+        client=client,
+        standard_cohort_uuid=STANDARD_COHORT_UUID,
+        **_expected_public_digests(rows),
+        observed_at_utc="2026-08-21T08:00:00Z",
+        observed_principal=EXPECTED_MODEL_READER,
+        job_config_factory=_sdk_job_config,
+    )
+
+    assert result.receipt["status"] == "READY_FOR_SYNC_NOT_TRAINED"
+    assert result.receipt["fit_call_count"] == 0
+    assert result.prepared_dataset is not None
+    assert result.prepared_dataset.runtime_train_features.shape == (1, 16)
+    assert result.prepared_dataset.train_features.shape == (1, 15)
+    assert result.prepared_dataset.target_source_feature == "watch_load_median_300"
+    assert result.prepared_dataset.fit_call_count == 0
+    assert client.calls == [
+        {
+            "query": module.standard_cohort_query_contract(STANDARD_COHORT_UUID)[
+                "query"
+            ],
+            "job_config": {
+                "query_parameters": [
+                    {
+                        "name": "standard_cohort_uuid",
+                        "type": "STRING",
+                        "value": STANDARD_COHORT_UUID,
+                    }
+                ]
+            },
+            "project": "multi-app-kidsignal-260801",
+            "location": "asia-southeast1",
+        }
+    ]
+    assert "training_examples_train_validation_v1" not in str(
+        client.calls[0]["query"]
+    )
+
+
+def test_standard_sdk_reader_zero_rows_and_wrong_order_fail_closed() -> None:
+    import multisensor_ml.standard_baseline_bigquery as module
+
+    zero = module.run_read_only_standard_cohort_sdk_reader(
+        client=_SdkClient(_SdkRowIterator([])),
+        standard_cohort_uuid=STANDARD_COHORT_UUID,
+        **_expected_public_digests(),
+        observed_at_utc="2026-08-21T08:00:00Z",
+        observed_principal=EXPECTED_MODEL_READER,
+        job_config_factory=_sdk_job_config,
+    )
+    wrong_order = module.run_read_only_standard_cohort_sdk_reader(
+        client=_SdkClient(
+            _SdkRowIterator([], tuple(reversed(STANDARD_BASELINE_VIEW_FIELDS)))
+        ),
+        standard_cohort_uuid=STANDARD_COHORT_UUID,
+        **_expected_public_digests(),
+        observed_at_utc="2026-08-21T08:00:00Z",
+        observed_principal=EXPECTED_MODEL_READER,
+        job_config_factory=_sdk_job_config,
+    )
+
+    assert zero.receipt["status"] == "BLOCKED_NO_REAL_COHORT"
+    assert zero.receipt["fit_call_count"] == 0
+    assert zero.prepared_dataset is None
+    assert wrong_order.receipt["status"] == "BLOCKED_SCHEMA_CONTRACT_MISMATCH"
+    assert wrong_order.receipt["fit_call_count"] == 0
+    assert wrong_order.prepared_dataset is None

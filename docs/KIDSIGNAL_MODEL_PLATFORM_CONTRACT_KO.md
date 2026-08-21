@@ -160,14 +160,47 @@ capture continuity/sequence grouping에만 사용하며 개인 identity로 사�
 - 실제 성능은 증거가 생길 때까지 `NOT VERIFIED`
 - reviewed event onset/end 계약이 생기기 전에는 event delay와 forecast lead-time을 계산하지 않음
 
+## 실데이터 전 구현 완료 경계
+
+- 표준 plane은 `standard_baseline_train_validation_v1`의 정확한 24개 필드만 읽고
+  `standard_cohort_uuid`와 예상 public cohort/split digest를 필수로 고정한다.
+- 행동 plane은 `training_examples_train_validation_v1`의 정확한 26개 필드만 읽고
+  `training_cohort_uuid`와 예상 public cohort/split digest를 필수로 고정한다.
+- 두 plane의 조회 계약은 각각 `standard_cohort_query_contract()`와
+  `behavior_cohort_query_contract()`로 제공한다. 같은 parameterized SQL을 로컬 `bq` CLI와
+  Kaggle의 `google.cloud.bigquery` SDK에서 재사용할 수 있지만, 조회 계약 자체는 실행기가
+  아니다. 실제 SDK 실행은 각각 `run_read_only_standard_cohort_sdk_reader()`와
+  `run_read_only_behavior_cohort_sdk_reader()`가 담당하며 UUIDv4 STRING parameter,
+  project `multi-app-kidsignal-260801`, location `asia-southeast1`을 고정한다. private table이나
+  LOCKED row를 조회하는 fallback transport는 제공하지 않는다.
+- SDK reader는 주입된 `google.cloud.bigquery.Client` 호환 객체의 `query().result()`를
+  실행하고 반환 schema의 정확한 24/26 필드 순서와 Row-like `items()`를 검증한다.
+  `google-cloud-bigquery`는 라이브러리 import의 필수 의존성이 아니며 실제 SDK 실행 경계에서만
+  지연 import한다. 테스트는 외부 GCP 연결 없이 narrow client와 job-config factory를 주입한다.
+- SDK가 반환한 Row-like 객체는 각 plane의 동기화·readiness validator를 통과한 뒤에만
+  prepared dataset으로 변환한다. 조회 순서와 무관하게 public digest를 독립 재계산한다.
+- 표준 prepared dataset은 runtime Watch 16개 배열과 trainer 15개 배열을 별도로 보존한다.
+  `watch_load_median_300`은 target source이므로 trainer 배열에서 제외한다.
+- person-group은 TRAIN/VALIDATION subject 교집합 0을 요구한다. 동일 사람 chronological
+  split은 validation 시작 전 최소 1,800초 purge를 요구한다.
+- 0행, schema/digest/identity 불일치, LOCKED, private field, 누출 또는 split 위반은
+  trainer 호출 전에 fail-closed 처리하며 receipt의 `fit_call_count`는 0이다.
+
+실제 cohort가 도착하기 전에는 query/schema/digest/shape 계약만 검증한다. fixture는 이
+계약의 회귀 테스트이며 모델 fitting, 성능 평가 또는 bundle 생성 입력이 아니다.
+
 ## 현재 차단 요인
 
-1. model training BigQuery 3 tables와 authorized view가 아직 live 배포되지 않음
-2. 동결된 실제 `training_cohort_uuid + cohort_digest` 미제공
-3. 독립 `label_revision_uuid + review_uuid` support 없음
+2026-08-21 app/backend handoff 증거 기준으로 두 authorized view는 존재하지만 표준 및 행동
+example/cohort/member와 view가 모두 0행이다. 따라서 현재 차단은 view 부재가 아니라 실제
+quality-valid frozen cohort 부재다.
+
+1. 양수 frozen `standard_cohort_uuid`와 public cohort/split digest 미제공
+2. 표준 TRAIN/VALIDATION을 구성할 quality-valid no-pattern hour 부재
+3. 행동 plane의 독립 reviewed positive/negative truth support 부재
 4. H10-only와 Watch+H10 실제 cohort 없음
 5. reviewed event onset/end anchor 계약이 없어 delay/lead-time 평가는 차단됨
 
 따라서 이번 local fixture bundle은 인터페이스·ONNX·hash 재현 증거이지 배포 모델이 아니다.
 실제 frozen cohort가 제공되기 전에는 “실제 표준모델 생성 완료”가 아니라
-`BLOCKED_NO_FROZEN_TRAINING_VIEW / NOT STARTED / NOT EVALUABLE` 상태다.
+`BLOCKED_NO_REAL_COHORT / NOT STARTED / NOT EVALUABLE` 상태이며 `fit_call_count=0`이다.
