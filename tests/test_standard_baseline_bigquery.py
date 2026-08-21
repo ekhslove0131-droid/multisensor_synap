@@ -697,3 +697,27 @@ def test_reader_uses_bound_uuid_and_only_standard_authorized_view(tmp_path: Path
         f"--parameter=standard_cohort_uuid:STRING:{STANDARD_COHORT_UUID}"
         in calls[1]
     )
+
+
+def test_standard_query_contract_is_transport_neutral_for_kaggle() -> None:
+    import multisensor_ml.standard_baseline_bigquery as module
+
+    contract = module.standard_cohort_query_contract(STANDARD_COHORT_UUID)
+
+    assert contract["authorized_view"] == (
+        "multi-app-kidsignal-260801.kidsignal_model_training."
+        "standard_baseline_train_validation_v1"
+    )
+    assert contract["parameter"] == {
+        "name": "standard_cohort_uuid",
+        "type": "STRING",
+        "value": STANDARD_COHORT_UUID,
+    }
+    assert contract["field_count"] == 24
+    assert contract["locked_access"] is False
+    assert contract["allowed_transports"] == ["bq_cli", "google_cloud_bigquery_sdk"]
+    query = str(contract["query"])
+    assert "standard_cohort_uuid=@standard_cohort_uuid" in query
+    assert "ORDER BY split_role, training_subject_uuid, hour_start_ms" in query
+    assert "training_examples_train_validation_v1" not in query
+    assert "kidsignal_training_private" not in query

@@ -1153,6 +1153,36 @@ def _write_receipt(path: Path, receipt: Mapping[str, object]) -> None:
         stream.write("\n")
 
 
+def standard_cohort_query_contract(
+    standard_cohort_uuid: str,
+) -> dict[str, object]:
+    """Return the parameterized authorized-view query shared by CLI and Kaggle."""
+
+    cohort_uuid = _canonical_uuid(
+        standard_cohort_uuid,
+        "standard_cohort_uuid",
+        versions=frozenset({4}),
+    )
+    selected_fields = ", ".join(STANDARD_BASELINE_VIEW_FIELDS)
+    return {
+        "authorized_view": STANDARD_BASELINE_AUTHORIZED_VIEW,
+        "query": (
+            f"SELECT {selected_fields} FROM `{STANDARD_BASELINE_AUTHORIZED_VIEW}` "
+            "WHERE standard_cohort_uuid=@standard_cohort_uuid "
+            "ORDER BY split_role, training_subject_uuid, hour_start_ms, "
+            "standard_hour_uuid"
+        ),
+        "parameter": {
+            "name": "standard_cohort_uuid",
+            "type": "STRING",
+            "value": cohort_uuid,
+        },
+        "field_count": len(STANDARD_BASELINE_VIEW_FIELDS),
+        "locked_access": False,
+        "allowed_transports": ["bq_cli", "google_cloud_bigquery_sdk"],
+    }
+
+
 def run_read_only_standard_cohort_reader(
     output_receipt: Path,
     *,
@@ -1208,20 +1238,16 @@ def run_read_only_standard_cohort_reader(
         )
         _write_receipt(output_receipt, receipt)
         return receipt
-    selected_fields = ", ".join(STANDARD_BASELINE_VIEW_FIELDS)
-    query = (
-        f"SELECT {selected_fields} FROM `{STANDARD_BASELINE_AUTHORIZED_VIEW}` "
-        "WHERE standard_cohort_uuid=@standard_cohort_uuid "
-        "ORDER BY split_role, training_subject_uuid, hour_start_ms, standard_hour_uuid"
-    )
+    query_contract = standard_cohort_query_contract(cohort_uuid)
+    parameter = cast(Mapping[str, object], query_contract["parameter"])
     rows_result = runner(
         [
             *common,
             "query",
             "--use_legacy_sql=false",
             "--format=json",
-            f"--parameter=standard_cohort_uuid:STRING:{cohort_uuid}",
-            query,
+            f"--parameter={parameter['name']}:{parameter['type']}:{parameter['value']}",
+            str(query_contract["query"]),
         ]
     )
     if rows_result.returncode != 0:

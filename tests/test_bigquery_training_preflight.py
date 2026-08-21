@@ -2,6 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 from subprocess import CompletedProcess
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
@@ -445,6 +446,51 @@ def test_validated_behavior_rows_prepare_typed_trainer_inputs_without_fit() -> N
     assert prepared.public_split_digest == rows[0]["public_split_digest"]
     assert len(prepared.canonical_handoff_digest) == 64
     assert prepared.fit_call_count == 0
+
+
+def test_behavior_query_contract_is_transport_neutral_for_kaggle() -> None:
+    import multisensor_ml.bigquery_training_preflight as module
+
+    contract = module.behavior_cohort_query_contract(COHORT_UUID)
+
+    assert contract["authorized_view"] == (
+        "multi-app-kidsignal-260801.kidsignal_model_training."
+        "training_examples_train_validation_v1"
+    )
+    assert contract["parameter"] == {
+        "name": "training_cohort_uuid",
+        "type": "STRING",
+        "value": COHORT_UUID,
+    }
+    assert contract["field_count"] == 26
+    assert contract["locked_access"] is False
+    assert contract["allowed_transports"] == ["bq_cli", "google_cloud_bigquery_sdk"]
+    query = str(contract["query"])
+    assert "training_cohort_uuid=@training_cohort_uuid" in query
+    assert "ORDER BY split_role, training_subject_uuid, window_start_ms" in query
+    assert "standard_baseline_train_validation_v1" not in query
+    assert "kidsignal_training_private" not in query
+
+
+def test_behavior_query_contract_rejects_uuid5_before_any_read(tmp_path: Path) -> None:
+    import multisensor_ml.bigquery_training_preflight as module
+
+    cohort_uuid_v5 = str(uuid5(NAMESPACE_URL, "kidsignal-behavior-cohort"))
+    calls: list[list[str]] = []
+
+    with pytest.raises(ValueError, match="unsupported UUID version"):
+        module.behavior_cohort_query_contract(cohort_uuid_v5)
+    with pytest.raises(ValueError, match="unsupported UUID version"):
+        run_read_only_cohort_reader(
+            tmp_path / "uuid5-blocked.json",
+            training_cohort_uuid=cohort_uuid_v5,
+            **_expected_public_digests(),
+            observed_at_utc="2026-08-13T12:00:00Z",
+            observed_principal=EXPECTED_MODEL_READER,
+            runner=lambda command: calls.append(command),
+        )
+
+    assert calls == []
 
 
 def test_not_evaluable_rows_cannot_prepare_trainer_inputs() -> None:

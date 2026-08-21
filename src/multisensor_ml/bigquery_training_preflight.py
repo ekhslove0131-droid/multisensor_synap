@@ -68,13 +68,20 @@ class PreparedBehaviorDataset:
     fit_call_count: int = 0
 
 
-def _canonical_uuid(value: str, field: str) -> str:
+def _canonical_uuid(
+    value: str,
+    field: str,
+    *,
+    versions: frozenset[int] | None = None,
+) -> str:
     try:
         parsed = UUID(value)
     except (AttributeError, TypeError, ValueError) as error:
         raise ValueError(f"{field} must be a canonical UUID") from error
     if str(parsed) != value.lower():
         raise ValueError(f"{field} must be a canonical UUID")
+    if versions is not None and parsed.version not in versions:
+        raise ValueError(f"{field} has unsupported UUID version")
     return str(parsed)
 
 
@@ -335,7 +342,9 @@ def build_cohort_readiness_receipt(
     """Validate one public cohort without fitting or exposing row content."""
 
     requested_uuid = _canonical_uuid(
-        requested_training_cohort_uuid, "training_cohort_uuid"
+        requested_training_cohort_uuid,
+        "training_cohort_uuid",
+        versions=frozenset({4}),
     )
     fields = _validate_exact_schema(schema_fields)
     expected_cohort_digest = _require_sha256(
@@ -548,6 +557,36 @@ def _parse_authorized_rows(stdout: str) -> tuple[dict[str, object], ...]:
     return tuple(output)
 
 
+def behavior_cohort_query_contract(
+    training_cohort_uuid: str,
+) -> dict[str, object]:
+    """Return the parameterized authorized-view query shared by CLI and Kaggle."""
+
+    cohort_uuid = _canonical_uuid(
+        training_cohort_uuid,
+        "training_cohort_uuid",
+        versions=frozenset({4}),
+    )
+    selected_fields = ", ".join(EXPECTED_VIEW_FIELDS)
+    return {
+        "authorized_view": AUTHORIZED_TRAINING_VIEW,
+        "query": (
+            f"SELECT {selected_fields} FROM `{AUTHORIZED_TRAINING_VIEW}` "
+            "WHERE training_cohort_uuid=@training_cohort_uuid "
+            "ORDER BY split_role, training_subject_uuid, window_start_ms, "
+            "exact_window_id"
+        ),
+        "parameter": {
+            "name": "training_cohort_uuid",
+            "type": "STRING",
+            "value": cohort_uuid,
+        },
+        "field_count": len(EXPECTED_VIEW_FIELDS),
+        "locked_access": False,
+        "allowed_transports": ["bq_cli", "google_cloud_bigquery_sdk"],
+    }
+
+
 def run_read_only_cohort_reader(
     output_receipt: Path,
     *,
@@ -560,7 +599,11 @@ def run_read_only_cohort_reader(
 ) -> dict[str, object]:
     """Read exactly one public cohort with a bound UUID parameter."""
 
-    cohort_uuid = _canonical_uuid(training_cohort_uuid, "training_cohort_uuid")
+    cohort_uuid = _canonical_uuid(
+        training_cohort_uuid,
+        "training_cohort_uuid",
+        versions=frozenset({4}),
+    )
     expected_cohort_digest = _require_sha256(
         expected_public_cohort_digest, "expected_public_cohort_digest"
     )
@@ -600,20 +643,16 @@ def run_read_only_cohort_reader(
             json.dump(receipt, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
         return receipt
-    selected_fields = ", ".join(EXPECTED_VIEW_FIELDS)
-    query = (
-        f"SELECT {selected_fields} FROM `{AUTHORIZED_TRAINING_VIEW}` "
-        "WHERE training_cohort_uuid=@training_cohort_uuid "
-        "ORDER BY split_role, training_subject_uuid, window_start_ms, exact_window_id"
-    )
+    query_contract = behavior_cohort_query_contract(cohort_uuid)
+    parameter = cast(Mapping[str, object], query_contract["parameter"])
     rows_result = runner(
         [
             *common,
             "query",
             "--use_legacy_sql=false",
             "--format=json",
-            f"--parameter=training_cohort_uuid:STRING:{cohort_uuid}",
-            query,
+            f"--parameter={parameter['name']}:{parameter['type']}:{parameter['value']}",
+            str(query_contract["query"]),
         ]
     )
     if rows_result.returncode != 0:
