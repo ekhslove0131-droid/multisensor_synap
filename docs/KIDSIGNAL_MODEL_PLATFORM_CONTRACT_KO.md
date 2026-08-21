@@ -186,6 +186,26 @@ capture continuity/sequence grouping에만 사용하며 개인 identity로 사�
 - 0행, schema/digest/identity 불일치, LOCKED, private field, 누출 또는 split 위반은
   trainer 호출 전에 fail-closed 처리하며 receipt의 `fit_call_count`는 0이다.
 
+### Kaggle 실제 cohort intake
+
+- `kaggle/10_kidsignal_bigquery_intake.ipynb`는 기존 01~09 합성·재현·benchmark와 분리된
+  실제 cohort 전용 read-only intake다. JSON은 직접 편집하지 않고
+  `scripts/build_kaggle_bigquery_intake_notebook.py`로 생성한다.
+- 실행 mode는 `standard`(24 fields)와 `behavior`(26 fields)뿐이다. 각 mode는 UUIDv4
+  cohort UUID 및 사전에 전달받은 public cohort/split digest를 요구하고, 기존 SDK reader를
+  호출한다. SQL과 field 목록을 notebook에 복제하지 않는다.
+- `google-cloud-bigquery`는 notebook의 실제 실행 cell에서만 필요한 지연 runtime dependency다.
+  `multisensor_ml` wheel/package와 Kaggle runtime ADC는 notebook 밖에서 준비하며, notebook은
+  dependency 설치나 credential JSON·token 기록을 수행하지 않는다. 전용 model-reader
+  principal을 확인할 수 없으면 즉시 실패한다.
+- 출력은 row payload가 아니라 bounded readiness receipt, split count/class count와 배열 shape만
+  담는다. 표준 mode는 runtime 16개와 target source를 제외한 trainer 15개 shape를 분리한다.
+  account/person/membership UUID, training subject/capture pseudonym, raw URI 및 feature row는
+  출력하거나 저장하지 않는다.
+- 0행이나 schema/digest/identity/split/class 위반은 `BLOCKED_*`로 끝나며, 성공해도
+  `READY_FOR_SYNC_NOT_TRAINED`에서 정지한다. fit·평가·ONNX·bundle·승격은 모두 실행하지 않고
+  `fit_call_count=0`을 유지한다.
+
 실제 cohort가 도착하기 전에는 query/schema/digest/shape 계약만 검증한다. fixture는 이
 계약의 회귀 테스트이며 모델 fitting, 성능 평가 또는 bundle 생성 입력이 아니다.
 
