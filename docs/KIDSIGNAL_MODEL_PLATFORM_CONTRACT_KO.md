@@ -126,6 +126,15 @@ reference 선택은 train만 사용한다. validation은 candidate/adapter 선�
 `split_role, training_subject_uuid, window_start_ms, exact_window_id` 순으로 정렬한 뒤 하나의
 envelope로 조립한다.
 
+Cloud의 create-only model sync receipt는 row handoff와 별도로
+`READY_FOR_MODEL_SYNC_NOT_TRAINED` 상태만 전달한다. 모델의
+`parse_model_sync_receipt()`는 정확한 15개 필드, UUIDv4 cohort, canonical Watch feature
+schema, public cohort/split digest, 표준 24·행동 26 field count, 최소 1,800초 purge,
+양수 TRAIN/VALIDATION row count와 `fit_call_count=0`을 검증한다. `handoff_digest`는 자신을
+제외한 receipt 전체를 같은 canonical JSON 규칙으로 독립 재계산한다. 이 receipt에는 row,
+feature value, 직접 identity, raw/LOCKED/artifact URI가 없으며 fixture receipt는 계약 증거일
+뿐 실제 cohort나 학습 승인으로 사용하지 않는다.
+
 review truth 조합은 `TARGET_EVENT -> POSITIVE`, `VALID_NON_EVENT -> NEGATIVE`,
 `HARD_NEGATIVE -> NEGATIVE`만 허용한다. NEGATIVE의 `observation_code`는 `NO_EVENT`이고
 `temporal_stage`는 audit 값일 뿐 모델 truth로 사용하지 않는다.
