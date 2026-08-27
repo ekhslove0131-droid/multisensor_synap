@@ -59,6 +59,10 @@ class PreparedBehaviorDataset:
     public_cohort_digest: str
     public_split_digest: str
     canonical_handoff_digest: str
+    feature_schema_uuid: str
+    feature_schema_hash: str
+    split_policy: str
+    purge_seconds: int
     feature_names: tuple[str, ...]
     train_features: np.ndarray
     train_targets: np.ndarray
@@ -175,6 +179,10 @@ def prepare_behavior_dataset_handoff(
         public_cohort_digest=expected_cohort,
         public_split_digest=expected_split,
         canonical_handoff_digest=str(handoff["handoff_digest"]),
+        feature_schema_uuid=str(handoff["feature_schema_uuid"]),
+        feature_schema_hash=str(handoff["feature_schema_hash"]),
+        split_policy=str(handoff["split_policy"]),
+        purge_seconds=int(cast(int, handoff["purge_seconds"])),
         feature_names=tuple(FEATURE_NAMES),
         train_features=train[0],
         train_targets=train[1],

@@ -200,15 +200,19 @@ capture continuity/sequence grouping에만 사용하며 개인 identity로 사�
 - `kaggle/10_kidsignal_bigquery_intake.ipynb`는 기존 01~09 합성·재현·benchmark와 분리된
   실제 cohort 전용 read-only intake다. JSON은 직접 편집하지 않고
   `scripts/build_kaggle_bigquery_intake_notebook.py`로 생성한다.
-- 실행 mode는 `standard`(24 fields)와 `behavior`(26 fields)뿐이다. 각 mode는 UUIDv4
-  cohort UUID 및 사전에 전달받은 public cohort/split digest를 요구하고, 기존 SDK reader를
-  호출한다. SQL과 field 목록을 notebook에 복제하지 않는다.
+- 실행 mode는 `standard`(24 fields)와 `behavior`(26 fields)뿐이다. notebook은
+  `KIDSIGNAL_MODEL_SYNC_RECEIPT_PATH`의 create-only 15-field JSON 하나만 입력받는다. mode,
+  UUIDv4 cohort UUID, public cohort/split digest, Watch schema, split/purge, field count와
+  TRAIN/VALIDATION row count는 검증된 receipt에서만 파생하며 기존 SDK reader 결과와 전부
+  일치해야 한다. 기존의 네 수동 cohort 선택 환경변수는 사용하지 않고 SQL·field 목록도
+  notebook에 복제하지 않는다.
 - `google-cloud-bigquery`는 notebook의 실제 실행 cell에서만 필요한 지연 runtime dependency다.
   `multisensor_ml` wheel/package와 Kaggle runtime ADC는 notebook 밖에서 준비하며, notebook은
   dependency 설치나 credential JSON·token 기록을 수행하지 않는다. 전용 model-reader
   principal을 확인할 수 없으면 즉시 실패한다.
-- 출력은 row payload가 아니라 bounded readiness receipt, split count/class count와 배열 shape만
-  담는다. 표준 mode는 runtime 16개와 target source를 제외한 trainer 15개 shape를 분리한다.
+- 출력은 row payload가 아니라 bounded readiness receipt, receipt-to-BigQuery binding 요약,
+  split count/class count와 배열 shape만 담는다. 표준 mode는 runtime 16개와 target source를
+  제외한 trainer 15개 shape를 분리한다.
   account/person/membership UUID, training subject/capture pseudonym, raw URI 및 feature row는
   출력하거나 저장하지 않는다.
 - 0행이나 schema/digest/identity/split/class 위반은 `BLOCKED_*`로 끝나며, 성공해도
@@ -233,3 +237,5 @@ quality-valid frozen cohort 부재다.
 따라서 이번 local fixture bundle은 인터페이스·ONNX·hash 재현 증거이지 배포 모델이 아니다.
 실제 frozen cohort가 제공되기 전에는 “실제 표준모델 생성 완료”가 아니라
 `BLOCKED_NO_REAL_COHORT / NOT STARTED / NOT EVALUABLE` 상태이며 `fit_call_count=0`이다.
+
+상세 구현 계약: [표준 후보 bundle](KIDSIGNAL_STANDARD_CANDIDATE_BUNDLE_KO.md)

@@ -242,10 +242,58 @@ class _Client:
     def __init__(self, rows: list[dict[str, object]], fields: tuple[str, ...]) -> None:
         self._iterator = _RowIterator(rows, fields)
         self._credentials = SimpleNamespace(service_account_email=MODEL_READER)
+        self.query_calls = 0
 
     def query(self, query: str, **kwargs: object) -> _Job:
         del query, kwargs
+        self.query_calls += 1
         return _Job(self._iterator)
+
+
+def _model_sync_receipt(
+    mode: str,
+    values: list[dict[str, object]],
+    **overrides: object,
+) -> dict[str, object]:
+    cohort_field = (
+        "standard_cohort_uuid" if mode == "standard" else "training_cohort_uuid"
+    )
+    body: dict[str, object] = {
+        "contract_version": 1,
+        "status": "READY_FOR_MODEL_SYNC_NOT_TRAINED",
+        "plane": mode,
+        "cohort_uuid": values[0][cohort_field],
+        "public_cohort_digest": values[0]["public_cohort_digest"],
+        "public_split_digest": values[0]["public_split_digest"],
+        "feature_schema_uuid": values[0]["feature_schema_uuid"],
+        "feature_schema_hash": values[0]["feature_schema_hash"],
+        "split_policy": values[0]["split_policy"],
+        "purge_seconds": values[0]["purge_seconds"],
+        "authorized_field_count": 24 if mode == "standard" else 26,
+        "train_row_count": sum(row["split_role"] == "TRAIN" for row in values),
+        "validation_row_count": sum(
+            row["split_role"] == "VALIDATION" for row in values
+        ),
+        "fit_call_count": 0,
+    }
+    body.update(overrides)
+    return {**body, "handoff_digest": _sha256_json(body)}
+
+
+def _write_model_sync_receipt(
+    path: Path,
+    mode: str,
+    values: list[dict[str, object]],
+    **overrides: object,
+) -> None:
+    path.write_text(
+        json.dumps(
+            _model_sync_receipt(mode, values, **overrides),
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _fake_bigquery_module(client: _Client) -> ModuleType:
@@ -286,15 +334,14 @@ def _execute_code_cells(notebook: nbformat.NotebookNode) -> dict[str, object]:
 
 
 @pytest.mark.parametrize(
-    ("mode", "cohort_uuid", "rows", "fields", "expected_train_shape"),
+    ("mode", "rows", "fields", "expected_train_shape"),
     [
-        ("standard", STANDARD_COHORT_UUID, _standard_rows, STANDARD_BASELINE_VIEW_FIELDS, [1, 15]),
-        ("behavior", BEHAVIOR_COHORT_UUID, _behavior_rows, EXPECTED_VIEW_FIELDS, [2, 16]),
+        ("standard", _standard_rows, STANDARD_BASELINE_VIEW_FIELDS, [1, 15]),
+        ("behavior", _behavior_rows, EXPECTED_VIEW_FIELDS, [2, 16]),
     ],
 )
 def test_generated_notebook_executes_bounded_sdk_intake_for_both_planes(
     mode: str,
-    cohort_uuid: str,
     rows,
     fields: tuple[str, ...],
     expected_train_shape: list[int],
@@ -305,14 +352,9 @@ def test_generated_notebook_executes_bounded_sdk_intake_for_both_planes(
     client = _Client(values, fields)
     _install_fake_bigquery(monkeypatch, client)
     output = tmp_path / f"{mode}.json"
-    monkeypatch.setenv("KIDSIGNAL_INTAKE_MODE", mode)
-    monkeypatch.setenv("KIDSIGNAL_COHORT_UUID", cohort_uuid)
-    monkeypatch.setenv(
-        "KIDSIGNAL_PUBLIC_COHORT_DIGEST", str(values[0]["public_cohort_digest"])
-    )
-    monkeypatch.setenv(
-        "KIDSIGNAL_PUBLIC_SPLIT_DIGEST", str(values[0]["public_split_digest"])
-    )
+    receipt_path = tmp_path / f"{mode}-model-sync-receipt.json"
+    _write_model_sync_receipt(receipt_path, mode, values)
+    monkeypatch.setenv("KIDSIGNAL_MODEL_SYNC_RECEIPT_PATH", str(receipt_path))
     monkeypatch.setenv("KIDSIGNAL_INTAKE_OUTPUT", str(output))
 
     _execute_code_cells(_build_notebook())
@@ -322,6 +364,11 @@ def test_generated_notebook_executes_bounded_sdk_intake_for_both_planes(
     assert artifact["readiness_receipt"]["status"] == "READY_FOR_SYNC_NOT_TRAINED"
     assert artifact["readiness_receipt"]["fit_call_count"] == 0
     assert artifact["summary"]["train_shape"] == expected_train_shape
+    assert artifact["model_sync_binding"]["matched"] is True
+    assert artifact["model_sync_binding"]["handoff_digest"] == (
+        _model_sync_receipt(mode, values)["handoff_digest"]
+    )
+    assert client.query_calls == 1
     serialized = json.dumps(artifact, sort_keys=True)
     for forbidden in (
         "account_uuid",
@@ -335,26 +382,115 @@ def test_generated_notebook_executes_bounded_sdk_intake_for_both_planes(
 
 
 @pytest.mark.parametrize(
-    ("mode", "cohort_uuid", "rows", "fields"),
+    ("mode", "rows", "fields"),
     [
-        ("standard", STANDARD_COHORT_UUID, _standard_rows, STANDARD_BASELINE_VIEW_FIELDS),
-        ("behavior", BEHAVIOR_COHORT_UUID, _behavior_rows, EXPECTED_VIEW_FIELDS),
+        ("standard", _standard_rows, STANDARD_BASELINE_VIEW_FIELDS),
+        ("behavior", _behavior_rows, EXPECTED_VIEW_FIELDS),
+    ],
+)
+def test_receipt_bound_intake_rejects_private_or_invalid_receipt_before_query(
+    mode: str,
+    rows,
+    fields: tuple[str, ...],
+) -> None:
+    from multisensor_ml.kaggle_bigquery_intake import (
+        run_receipt_bound_kaggle_bigquery_intake,
+    )
+
+    values = rows()
+    receipt = _model_sync_receipt(mode, values)
+    receipt["person_uuid"] = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    body = {key: value for key, value in receipt.items() if key != "handoff_digest"}
+    receipt["handoff_digest"] = _sha256_json(body)
+    client = _Client(values, fields)
+
+    with pytest.raises(ValueError, match="unknown field person_uuid"):
+        run_receipt_bound_kaggle_bigquery_intake(
+            model_sync_receipt=receipt,
+            client=client,
+            observed_at_utc="2026-08-27T00:00:00Z",
+            observed_principal=MODEL_READER,
+            job_config_factory=lambda name, parameter_type, value: {
+                "name": name,
+                "type": parameter_type,
+                "value": value,
+            },
+        )
+
+    assert client.query_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "rows", "fields", "override"),
+    [
+        ("standard", _standard_rows, STANDARD_BASELINE_VIEW_FIELDS, {"train_row_count": 2}),
+        ("standard", _standard_rows, STANDARD_BASELINE_VIEW_FIELDS, {"validation_row_count": 2}),
+        ("standard", _standard_rows, STANDARD_BASELINE_VIEW_FIELDS, {"purge_seconds": 1801}),
+        (
+            "standard",
+            _standard_rows,
+            STANDARD_BASELINE_VIEW_FIELDS,
+            {"split_policy": "PERSON_GROUP"},
+        ),
+        ("behavior", _behavior_rows, EXPECTED_VIEW_FIELDS, {"train_row_count": 3}),
+    ],
+)
+def test_receipt_bound_intake_blocks_every_receipt_to_bigquery_binding_mismatch(
+    mode: str,
+    rows,
+    fields: tuple[str, ...],
+    override: dict[str, object],
+) -> None:
+    from multisensor_ml.kaggle_bigquery_intake import (
+        run_receipt_bound_kaggle_bigquery_intake,
+    )
+
+    values = rows()
+    artifact = run_receipt_bound_kaggle_bigquery_intake(
+        model_sync_receipt=_model_sync_receipt(mode, values, **override),
+        client=_Client(values, fields),
+        observed_at_utc="2026-08-27T00:00:00Z",
+        observed_principal=MODEL_READER,
+        job_config_factory=lambda name, parameter_type, value: {
+            "name": name,
+            "type": parameter_type,
+            "value": value,
+        },
+    )
+
+    assert artifact["model_sync_binding"]["matched"] is False
+    assert artifact["readiness_receipt"]["training_ready"] is False
+    assert artifact["readiness_receipt"]["fit_call_count"] == 0
+    assert artifact["summary"]["train_shape"] is None
+    assert artifact["execution_boundary"] == {
+        "fit_call_count": 0,
+        "training_started": False,
+        "evaluation_started": False,
+        "onnx_exported": False,
+        "bundle_created": False,
+        "promotion_started": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mode", "rows", "fields"),
+    [
+        ("standard", _standard_rows, STANDARD_BASELINE_VIEW_FIELDS),
+        ("behavior", _behavior_rows, EXPECTED_VIEW_FIELDS),
     ],
 )
 def test_intake_consumer_blocks_zero_rows_and_schema_mismatch_without_fit(
     mode: str,
-    cohort_uuid: str,
     rows,
     fields: tuple[str, ...],
 ) -> None:
-    from multisensor_ml.kaggle_bigquery_intake import run_kaggle_bigquery_intake
+    from multisensor_ml.kaggle_bigquery_intake import (
+        run_receipt_bound_kaggle_bigquery_intake,
+    )
 
     values = rows()
     common = {
-        "mode": mode,
-        "cohort_uuid": cohort_uuid,
-        "expected_public_cohort_digest": str(values[0]["public_cohort_digest"]),
-        "expected_public_split_digest": str(values[0]["public_split_digest"]),
+        "model_sync_receipt": _model_sync_receipt(mode, values),
         "observed_at_utc": "2026-08-21T09:00:00Z",
         "observed_principal": MODEL_READER,
         "job_config_factory": lambda name, parameter_type, value: {
@@ -364,28 +500,34 @@ def test_intake_consumer_blocks_zero_rows_and_schema_mismatch_without_fit(
         },
     }
 
-    zero = run_kaggle_bigquery_intake(client=_Client([], fields), **common)
-    mismatch = run_kaggle_bigquery_intake(
+    zero = run_receipt_bound_kaggle_bigquery_intake(
+        client=_Client([], fields), **common
+    )
+    mismatch = run_receipt_bound_kaggle_bigquery_intake(
         client=_Client([], tuple(reversed(fields))), **common
     )
-    digest_mismatch = run_kaggle_bigquery_intake(
+    digest_mismatch = run_receipt_bound_kaggle_bigquery_intake(
         client=_Client(values, fields),
         **{
             **common,
-            "expected_public_cohort_digest": "e" * 64,
+            "model_sync_receipt": _model_sync_receipt(
+                mode, values, public_cohort_digest="e" * 64
+            ),
         },
     )
 
-    assert zero["readiness_receipt"]["status"] == "BLOCKED_NO_REAL_COHORT"
+    assert zero["readiness_receipt"]["status"] == (
+        "BLOCKED_MODEL_SYNC_RECEIPT_BINDING_MISMATCH"
+    )
     assert zero["readiness_receipt"]["fit_call_count"] == 0
     assert zero["summary"]["train_shape"] is None
     assert mismatch["readiness_receipt"]["status"] == (
-        "BLOCKED_SCHEMA_CONTRACT_MISMATCH"
+        "BLOCKED_MODEL_SYNC_RECEIPT_BINDING_MISMATCH"
     )
     assert mismatch["readiness_receipt"]["fit_call_count"] == 0
     assert mismatch["summary"]["train_shape"] is None
     assert digest_mismatch["readiness_receipt"]["status"] == (
-        "BLOCKED_EXPECTED_PUBLIC_DIGEST_MISMATCH"
+        "BLOCKED_MODEL_SYNC_RECEIPT_BINDING_MISMATCH"
     )
     assert digest_mismatch["readiness_receipt"]["fit_call_count"] == 0
     assert digest_mismatch["summary"]["train_shape"] is None
@@ -394,10 +536,10 @@ def test_intake_consumer_blocks_zero_rows_and_schema_mismatch_without_fit(
 def test_notebook_fails_clearly_when_bigquery_sdk_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("KIDSIGNAL_INTAKE_MODE", "standard")
-    monkeypatch.setenv("KIDSIGNAL_COHORT_UUID", STANDARD_COHORT_UUID)
-    monkeypatch.setenv("KIDSIGNAL_PUBLIC_COHORT_DIGEST", "a" * 64)
-    monkeypatch.setenv("KIDSIGNAL_PUBLIC_SPLIT_DIGEST", "b" * 64)
+    values = _standard_rows()
+    receipt_path = tmp_path / "model-sync-receipt.json"
+    _write_model_sync_receipt(receipt_path, "standard", values)
+    monkeypatch.setenv("KIDSIGNAL_MODEL_SYNC_RECEIPT_PATH", str(receipt_path))
     monkeypatch.setenv("KIDSIGNAL_INTAKE_OUTPUT", str(tmp_path / "missing.json"))
     real_import = builtins.__import__
 
@@ -419,14 +561,9 @@ def test_notebook_fails_clearly_when_adc_principal_is_missing(
     client = _Client(values, STANDARD_BASELINE_VIEW_FIELDS)
     client._credentials = SimpleNamespace()
     _install_fake_bigquery(monkeypatch, client)
-    monkeypatch.setenv("KIDSIGNAL_INTAKE_MODE", "standard")
-    monkeypatch.setenv("KIDSIGNAL_COHORT_UUID", STANDARD_COHORT_UUID)
-    monkeypatch.setenv(
-        "KIDSIGNAL_PUBLIC_COHORT_DIGEST", str(values[0]["public_cohort_digest"])
-    )
-    monkeypatch.setenv(
-        "KIDSIGNAL_PUBLIC_SPLIT_DIGEST", str(values[0]["public_split_digest"])
-    )
+    receipt_path = tmp_path / "model-sync-receipt.json"
+    _write_model_sync_receipt(receipt_path, "standard", values)
+    monkeypatch.setenv("KIDSIGNAL_MODEL_SYNC_RECEIPT_PATH", str(receipt_path))
     monkeypatch.setenv("KIDSIGNAL_INTAKE_OUTPUT", str(tmp_path / "missing-adc.json"))
 
     with pytest.raises(RuntimeError, match="ADC model-reader principal"):
