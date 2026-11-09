@@ -1,0 +1,10 @@
+seed: 20261006
+subject_count: 36
+duration_seconds: 3900
+prefill_seconds: 300
+calibration_seconds: 1800
+scored_seconds: 1800
+train_subjects: 24
+validation_subjects: 6
+test_subjects: 6
+events_per_subject: 2

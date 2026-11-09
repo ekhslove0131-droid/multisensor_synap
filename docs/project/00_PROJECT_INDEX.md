@@ -90,6 +90,7 @@ model_ready/ 정렬 시계열, 파생변수, 품질 피처, 학습용 라벨
 | 7 | `06_CODEX_IMPLEMENTATION_PRD.md` | Codex 구현 요구사항, Epic, 승인 기준 |
 | 8 | `07_GPT_PROJECT_INSTRUCTIONS.md` | GPT 프로젝트 설정에 붙여 넣을 지침 |
 | 9 | `08_SESSION_START_PROMPTS.md` | 첫 세션·연속 세션·Codex 전달 문구 |
+| 10 | `09_CLINICAL_PATTERN_PRIORS_AND_FORMULAS_KO.md` | 연구 기반 선행 패턴·파생변수·가상 라벨·표준 예측 결합 계약 |
 
 ---
 

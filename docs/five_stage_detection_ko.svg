@@ -1,0 +1,742 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="1571"
+   height="1000"
+   viewBox="0 0 1571 1000"
+   role="img"
+   aria-labelledby="title desc"
+   version="1.1"
+   id="svg67"
+   sodipodi:docname="five_stage_detection_ko.svg"
+   inkscape:version="1.4.4 (dcaf3e7, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <sodipodi:namedview
+     id="namedview67"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="0.59962655"
+     inkscape:cx="764.64259"
+     inkscape:cy="601.20754"
+     inkscape:window-width="1920"
+     inkscape:window-height="1022"
+     inkscape:window-x="1728"
+     inkscape:window-y="30"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg67" />
+  <title
+     id="title">표준선 매핑 기반 5단계 신호 감지 구조</title>
+  <desc
+     id="desc">개인 표준선 매핑 모델을 통과한 신호가 낮음, 중간, 높음, 감소, 회복의 다섯 단계를 거치는 파형과 경계선을 보여주는 한국어 다이어그램</desc>
+  <defs
+     id="defs4">
+    <linearGradient
+       id="bg"
+       x1="0"
+       y1="0"
+       x2="0"
+       y2="1">
+      <stop
+         offset="0"
+         stop-color="#f8fbff"
+         id="stop1" />
+      <stop
+         offset="1"
+         stop-color="#eef4fb"
+         id="stop2" />
+    </linearGradient>
+    <linearGradient
+       id="panel"
+       x1="0"
+       y1="0"
+       x2="1"
+       y2="1">
+      <stop
+         offset="0"
+         stop-color="#ffffff"
+         id="stop3" />
+      <stop
+         offset="1"
+         stop-color="#f6f9fd"
+         id="stop4" />
+    </linearGradient>
+    <filter
+       id="shadow"
+       x="-0.00036764706"
+       y="-0.0047169811"
+       width="1.0007353"
+       height="1.009434">
+      <feDropShadow
+         dx="0"
+         dy="5"
+         stdDeviation="8"
+         flood-color="#19324d"
+         flood-opacity="0.12" />
+    </filter>
+    <marker
+       id="arrow"
+       markerWidth="12"
+       markerHeight="12"
+       refX="10"
+       refY="6"
+       orient="auto">
+      <path
+         d="M 0,0 12,6 0,12 Z"
+         fill="#46637e"
+         id="path4" />
+    </marker>
+    <style
+       id="style4">
+      .font { font-family: -apple-system, BlinkMacSystemFont, &quot;Apple SD Gothic Neo&quot;, &quot;Noto Sans KR&quot;, &quot;Malgun Gothic&quot;, sans-serif; }
+      .title { font-size: 34px; font-weight: 800; fill: #13283d; }
+      .subtitle { font-size: 17px; fill: #536b80; }
+      .card-title { font-size: 21px; font-weight: 800; fill: #183248; }
+      .card-text { font-size: 16px; fill: #4d6479; }
+      .axis { font-size: 15px; fill: #667d90; }
+      .stage-code { font-size: 17px; font-weight: 800; letter-spacing: 0.3px; }
+      .stage-ko { font-size: 21px; font-weight: 800; }
+      .caption { font-size: 15px; fill: #40596e; }
+      .small { font-size: 14px; fill: #688095; }
+      .tiny { font-size: 12px; fill: #7890a3; }
+      .boundary { stroke: #6d8497; stroke-width: 2; stroke-dasharray: 8 8; }
+      .grid { stroke: #dce6ef; stroke-width: 1; }
+      .threshold { stroke: #91a8ba; stroke-width: 2; stroke-dasharray: 7 6; }
+    </style>
+  </defs>
+  <!-- Technical pipeline -->
+  <g
+     filter="url(#shadow)"
+     id="g9"
+     transform="matrix(1.083303,0,0,1.1543329,-81.651796,31.172545)">
+    <rect
+       x="80"
+       y="155"
+       width="275"
+       height="106"
+       rx="18"
+       fill="#eaf3ff"
+       stroke="#9ec4ec"
+       id="rect6" />
+    <rect
+       x="390"
+       y="155"
+       width="275"
+       height="106"
+       rx="18"
+       fill="#edf8f4"
+       stroke="#a4d7c7"
+       id="rect7" />
+    <rect
+       x="700"
+       y="155"
+       width="275"
+       height="106"
+       rx="18"
+       fill="#fff6e7"
+       stroke="#e7c98d"
+       id="rect8" />
+    <rect
+       x="1010"
+       y="155"
+       width="430"
+       height="106"
+       rx="18"
+       fill="#f5efff"
+       stroke="#c4ace7"
+       id="rect9" />
+  </g>
+  <text
+     x="214.32249"
+     y="270.26874"
+     text-anchor="middle"
+     class="font card-title"
+     id="text9"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">① 시간축 정렬</text>
+  <text
+     x="214.32249"
+     y="301.57983"
+     text-anchor="middle"
+     class="font card-text"
+     id="text10"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">Watch · Muse · Polar</text>
+  <text
+     x="214.32249"
+     y="328.41794"
+     text-anchor="middle"
+     class="font card-text"
+     id="text11"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">공통 UTC / 1초 축</text>
+  <text
+     x="560.98126"
+     y="270.26874"
+     text-anchor="middle"
+     class="font card-title"
+     id="text12"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">② 표준선 매핑 모델</text>
+  <text
+     x="560.98126"
+     y="301.57983"
+     text-anchor="middle"
+     class="font card-text"
+     id="text13"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">전역 기준선 → 개인 기준선</text>
+  <text
+     x="560.98126"
+     y="328.41794"
+     text-anchor="middle"
+     class="font card-text"
+     id="text14"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">센서별 어댑터 가중치</text>
+  <text
+     x="907.64014"
+     y="270.26874"
+     text-anchor="middle"
+     class="font card-title"
+     id="text15"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">③ 파생변수 계산</text>
+  <text
+     x="907.64014"
+     y="301.57983"
+     text-anchor="middle"
+     class="font card-text"
+     id="text16"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">robust z-score · 변화율</text>
+  <text
+     x="907.64014"
+     y="328.41794"
+     text-anchor="middle"
+     class="font card-text"
+     id="text17"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">누적 부하 · 품질 확인</text>
+  <text
+     x="1265.0612"
+     y="272.13364"
+     text-anchor="middle"
+     class="font card-title"
+     id="text18"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">④ 단계·행동 판정</text>
+  <text
+     x="1265.0612"
+     y="303.44476"
+     text-anchor="middle"
+     class="font card-text"
+     id="text19"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">사건 게이트 → 5단계 상태</text>
+  <text
+     x="1265.0612"
+     y="330.28284"
+     text-anchor="middle"
+     class="font card-text"
+     id="text20"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">행동 예측은 보조 출력</text>
+  <line
+     x1="357.11966"
+     y1="302.07516"
+     x2="384.20224"
+     y2="302.07516"
+     stroke="#46637e"
+     stroke-width="3.35476"
+     marker-end="url(#arrow)"
+     id="line20" />
+  <line
+     x1="692.9436"
+     y1="302.07516"
+     x2="720.02618"
+     y2="302.07516"
+     stroke="#46637e"
+     stroke-width="3.35476"
+     marker-end="url(#arrow)"
+     id="line21" />
+  <line
+     x1="1028.7676"
+     y1="302.07516"
+     x2="1055.8501"
+     y2="302.07516"
+     stroke="#46637e"
+     stroke-width="3.35476"
+     marker-end="url(#arrow)"
+     id="line22" />
+  <!-- Chart -->
+  <rect
+     x="5.0124497"
+     y="377.47241"
+     width="1559.9564"
+     height="617.56812"
+     rx="23.832668"
+     fill="#ffffff"
+     stroke="#d7e3ed"
+     id="rect22"
+     style="stroke-width:1.11825" />
+  <text
+     x="49.904327"
+     y="410.40463"
+     class="font card-title"
+     id="text22"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">신호 파형과 상태 경계</text>
+  <text
+     x="49.904327"
+     y="440.59753"
+     class="font small"
+     id="text23"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">파형은 개인 기준선 대비 변화량의 예시입니다. 실제 판정은 품질·결측·OOD 확인을 함께 통과해야 합니다.</text>
+  <!-- Stage bands -->
+  <rect
+     x="102.50972"
+     y="498.67737"
+     width="227.49364"
+     height="380.92987"
+     fill="#edf5ff"
+     id="rect23"
+     style="stroke-width:1.11825" />
+  <rect
+     x="330.00339"
+     y="498.67737"
+     width="249.1597"
+     height="380.92987"
+     fill="#fff8e9"
+     id="rect24"
+     style="stroke-width:1.11825" />
+  <rect
+     x="579.16309"
+     y="498.67737"
+     width="292.49182"
+     height="380.92987"
+     fill="#fff0ef"
+     id="rect25"
+     style="stroke-width:1.11825" />
+  <rect
+     x="871.65491"
+     y="498.67737"
+     width="270.82578"
+     height="380.92987"
+     fill="#f6efff"
+     id="rect26"
+     style="stroke-width:1.11825" />
+  <rect
+     x="1142.4807"
+     y="498.67737"
+     width="314.1579"
+     height="380.92987"
+     fill="#edf9f1"
+     id="rect27"
+     style="stroke-width:1.11825" />
+  <!-- Grid -->
+  <line
+     x1="102.50972"
+     y1="579.48065"
+     x2="1456.6385"
+     y2="579.48065"
+     class="grid"
+     id="line27" />
+  <line
+     x1="102.50972"
+     y1="660.284"
+     x2="1456.6385"
+     y2="660.284"
+     class="grid"
+     id="line28" />
+  <line
+     x1="102.50972"
+     y1="741.08728"
+     x2="1456.6385"
+     y2="741.08728"
+     class="grid"
+     id="line29" />
+  <line
+     x1="102.50972"
+     y1="821.89062"
+     x2="1456.6385"
+     y2="821.89062"
+     class="grid"
+     id="line30" />
+  <line
+     x1="102.50972"
+     y1="879.60724"
+     x2="1456.6385"
+     y2="879.60724"
+     stroke="#8ba1b2"
+     stroke-width="3.35476"
+     id="line31" />
+  <!-- Thresholds -->
+  <line
+     x1="102.50972"
+     y1="781.48895"
+     x2="1456.6385"
+     y2="781.48895"
+     class="threshold"
+     id="line32" />
+  <line
+     x1="102.50972"
+     y1="694.914"
+     x2="1456.6385"
+     y2="694.914"
+     class="threshold"
+     id="line33" />
+  <line
+     x1="102.50972"
+     y1="608.33899"
+     x2="1456.6385"
+     y2="608.33899"
+     class="threshold"
+     id="line34" />
+  <text
+     x="1564.0205"
+     y="761.5365"
+     text-anchor="end"
+     class="font tiny"
+     id="text34"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">낮음 경계</text>
+  <text
+     x="1566.257"
+     y="677.66742"
+     text-anchor="end"
+     class="font tiny"
+     id="text35"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">중간 경계</text>
+  <text
+     x="1565.1562"
+     y="596.03485"
+     text-anchor="end"
+     class="font tiny"
+     id="text36"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">높음 경계</text>
+  <text
+     x="1574.7653"
+     y="858.85095"
+     text-anchor="end"
+     class="font tiny"
+     id="text37"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">개인 기준선</text>
+  <!-- Stage boundaries -->
+  <line
+     x1="330.00339"
+     y1="498.67737"
+     x2="330.00339"
+     y2="879.60724"
+     class="boundary"
+     id="line37" />
+  <line
+     x1="579.16309"
+     y1="498.67737"
+     x2="579.16309"
+     y2="879.60724"
+     class="boundary"
+     id="line38" />
+  <line
+     x1="871.65491"
+     y1="498.67737"
+     x2="871.65491"
+     y2="879.60724"
+     class="boundary"
+     id="line39" />
+  <line
+     x1="1142.4807"
+     y1="498.67737"
+     x2="1142.4807"
+     y2="879.60724"
+     class="boundary"
+     id="line40" />
+  <!-- Waveform glow and waveform -->
+  <path
+     d="m 102.50973,879.60725 c 48.74863,0 86.66424,-2.30865 129.99637,-1.15433 43.33212,1.15433 64.99817,-6.926 92.08075,-18.46932 37.91561,-16.16066 59.58167,-55.40798 86.66425,-95.80964 32.49909,-49.63631 70.41469,-80.8033 108.33031,-100.42697 32.49909,-17.31499 46.58203,-41.55599 70.4147,-71.56864 32.49909,-40.40165 86.66424,-63.4883 135.41288,-53.09932 48.74864,10.38901 86.66424,32.32133 113.74683,80.80332 27.08257,47.32765 54.16515,103.88995 86.66423,138.51995 37.91562,41.55599 86.66425,61.17964 129.99635,76.18597 43.3322,12.69766 64.9982,25.39533 97.4973,31.16699 64.9982,9.23467 119.1634,12.69766 173.3285,13.85199 43.3322,0 86.6642,0 129.9963,0"
+     fill="none"
+     stroke="#f28d74"
+     stroke-opacity="0.18"
+     stroke-width="20.1286"
+     id="path40" />
+  <path
+     d="m 102.50973,879.60725 c 48.74863,0 86.66424,-2.30865 129.99637,-1.15433 43.33212,1.15433 64.99817,-6.926 92.08075,-18.46932 37.91561,-16.16066 59.58167,-55.40798 86.66425,-95.80964 32.49909,-49.63631 70.41469,-80.8033 108.33031,-100.42697 32.49909,-17.31499 46.58203,-41.55599 70.4147,-71.56864 32.49909,-40.40165 86.66424,-63.4883 135.41288,-53.09932 48.74864,10.38901 86.66424,32.32133 113.74683,80.80332 27.08257,47.32765 54.16515,103.88995 86.66423,138.51995 37.91562,41.55599 86.66425,61.17964 129.99635,76.18597 43.3322,12.69766 64.9982,25.39533 97.4973,31.16699 64.9982,9.23467 119.1634,12.69766 173.3285,13.85199 43.3322,0 86.6642,0 129.9963,0"
+     fill="none"
+     stroke="#dd594c"
+     stroke-width="6.70952"
+     stroke-linecap="round"
+     id="path41" />
+  <ellipse
+     cx="324.58688"
+     cy="859.98364"
+     fill="#4b98df"
+     stroke="#ffffff"
+     stroke-width="3.35476"
+     id="circle41"
+     rx="7.5831213"
+     ry="8.0803308" />
+  <ellipse
+     cx="579.16309"
+     cy="592.17834"
+     fill="#e5a33a"
+     stroke="#ffffff"
+     stroke-width="3.35476"
+     id="circle42"
+     rx="7.5831213"
+     ry="8.0803308" />
+  <ellipse
+     cx="725.409"
+     cy="539.07904"
+     fill="#d84f49"
+     stroke="#ffffff"
+     stroke-width="3.35476"
+     id="circle43"
+     rx="9.7497282"
+     ry="10.388996" />
+  <ellipse
+     cx="871.65491"
+     cy="723.77228"
+     fill="#9b70d4"
+     stroke="#ffffff"
+     stroke-width="3.35476"
+     id="circle44"
+     rx="7.5831213"
+     ry="8.0803308" />
+  <ellipse
+     cx="1142.4807"
+     cy="865.75525"
+     fill="#53a878"
+     stroke="#ffffff"
+     stroke-width="3.35476"
+     id="circle45"
+     rx="7.5831213"
+     ry="8.0803308" />
+  <!-- Axis labels -->
+  <text
+     x="66.678154"
+     y="857.70636"
+     text-anchor="end"
+     class="font axis"
+     id="text45"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">0</text>
+  <text
+     x="91.074028"
+     y="595.57599"
+     text-anchor="end"
+     class="font axis"
+     id="text46"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">높은 변화량</text>
+  <text
+     x="131.53165"
+     y="927.75018"
+     text-anchor="middle"
+     class="font axis"
+     id="text47"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">시간</text>
+  <text
+     x="62.765003"
+     y="812.98981"
+     transform="matrix(0.9687375,0.00403848,-0.00378997,1.0322556,0,0)"
+     text-anchor="middle"
+     class="font axis"
+     id="text48"
+     style="stroke-width:1.11825"><tspan
+       sodipodi:role="line"
+       id="tspan73"
+       x="62.765003"
+       y="812.98981"
+       style="stroke-width:1.11825">기준선 대비</tspan><tspan
+       sodipodi:role="line"
+       id="tspan74"
+       x="62.765003"
+       y="831.73981"
+       style="stroke-width:1.11825">변화량</tspan></text>
+  <!-- Stage labels -->
+  <text
+     x="223.23373"
+     y="516.63885"
+     text-anchor="middle"
+     class="font stage-code"
+     fill="#2777c5"
+     id="text49"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">LOW</text>
+  <text
+     x="223.23373"
+     y="546.83167"
+     text-anchor="middle"
+     class="font stage-ko"
+     fill="#2777c5"
+     id="text50"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">낮음</text>
+  <text
+     x="469.24966"
+     y="516.63885"
+     text-anchor="middle"
+     class="font stage-code"
+     fill="#b67a18"
+     id="text51"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">MEDIUM</text>
+  <text
+     x="469.24966"
+     y="546.83167"
+     text-anchor="middle"
+     class="font stage-ko"
+     fill="#b67a18"
+     id="text52"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">중간</text>
+  <text
+     x="748.81317"
+     y="516.63885"
+     text-anchor="middle"
+     class="font stage-code"
+     fill="#c6433e"
+     id="text53"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">HIGH</text>
+  <text
+     x="748.81317"
+     y="546.83167"
+     text-anchor="middle"
+     class="font stage-ko"
+     fill="#c6433e"
+     id="text54"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">높음</text>
+  <text
+     x="1039.5593"
+     y="516.63885"
+     text-anchor="middle"
+     class="font stage-code"
+     fill="#8053b5"
+     id="text55"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">DECREASING</text>
+  <text
+     x="1039.5593"
+     y="546.83167"
+     text-anchor="middle"
+     class="font stage-ko"
+     fill="#8053b5"
+     id="text56"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">감소</text>
+  <text
+     x="1341.4879"
+     y="516.63885"
+     text-anchor="middle"
+     class="font stage-code"
+     fill="#32845a"
+     id="text57"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">RECOVERY</text>
+  <text
+     x="1341.4879"
+     y="546.83167"
+     text-anchor="middle"
+     class="font stage-ko"
+     fill="#32845a"
+     id="text58"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">회복</text>
+  <!-- Stage captions -->
+  <text
+     x="223.23373"
+     y="891.25397"
+     text-anchor="middle"
+     class="font caption"
+     id="text59"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">선행행동 관찰 시기</text>
+  <text
+     x="472.39734"
+     y="891.98035"
+     text-anchor="middle"
+     class="font caption"
+     id="text59-6"
+     style="font-size:16.7738px;font-family:'-apple-system', BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;fill:#40596e;stroke-width:1.11825"
+     transform="scale(0.96874491,1.0322635)">조기개입및중재시기</text>
+  <text
+     x="495"
+     y="770"
+     text-anchor="middle"
+     class="font caption"
+     id="text60" />
+  <text
+     x="748.81317"
+     y="891.25397"
+     text-anchor="middle"
+     class="font caption"
+     id="text61"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">멜트다운등발생가능성높단계</text>
+  <text
+     x="1039.5593"
+     y="891.25397"
+     text-anchor="middle"
+     class="font caption"
+     id="text62"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">신호가 낮아지고 있습니다.</text>
+  <text
+     x="1341.4879"
+     y="891.25397"
+     text-anchor="middle"
+     class="font caption"
+     id="text63"
+     transform="scale(0.96874491,1.0322635)"
+     style="stroke-width:1.11825">기준선으로 회복 중입니다.</text>
+  <!-- Event gate and no event note -->
+  <text
+     xml:space="preserve"
+     style="font-size:35.1239px;writing-mode:lr-tb;direction:ltr;fill:#000000;stroke-width:2.927"
+     x="-777.09589"
+     y="69.264702"
+     id="text75"
+     transform="matrix(0.00106088,-1.0477349,0.9544387,0.00116458,0,0)"><tspan
+       sodipodi:role="line"
+       id="tspan75"
+       x="-777.09589"
+       y="69.264702"
+       style="stroke-width:2.927">→</tspan></text>
+  <text
+     xml:space="preserve"
+     style="font-size:31.3901px;writing-mode:lr-tb;direction:ltr;fill:#000000;stroke-width:2.61585"
+     x="110.96806"
+     y="1195.625"
+     id="text76"
+     transform="scale(1.2504229,0.79972944)"><tspan
+       sodipodi:role="line"
+       id="tspan76"
+       x="110.96806"
+       y="1195.625"
+       style="stroke-width:2.61585"> →</tspan></text>
+  <metadata
+     id="metadata76">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:title>표준선 매핑 기반 5단계 신호 감지 구조</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+</svg>

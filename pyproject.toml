@@ -17,6 +17,16 @@ dependencies = [
 
 [project.scripts]
 multisensor-synth = "multisensor_synth.cli:main"
+multisensor-synth-beta = "multisensor_synth.beta_observed.cli:main"
+
+[project.optional-dependencies]
+beta-observed = [
+  "neurokit2==0.2.13",
+  "synapbridge-beta-runtime",
+]
+
+[tool.uv.sources]
+synapbridge-beta-runtime = { path = "../multisensor_ml/.worktrees/kaggle-ml-dl-benchmark/beta_runtime", editable = true }
 
 [dependency-groups]
 dev = [
@@ -49,4 +59,12 @@ mypy_path = "src"
 
 [[tool.mypy.overrides]]
 module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["synapbridge_beta_runtime", "synapbridge_beta_runtime.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["neurokit2", "scipy", "scipy.*"]
 ignore_missing_imports = true
