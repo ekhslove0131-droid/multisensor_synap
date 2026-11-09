@@ -1,0 +1,80 @@
+{
+  "schema_version": "kidsignal-fa58bb9-model-compatibility/v1",
+  "superseded": true,
+  "superseded_reason": "platform description hash d8314b0c was incorrectly treated as the Watch runtime schema hash; H10 and combined fixtures were incorrectly described as training eligible",
+  "current_runtime_contract": {
+    "watch_only_schema_hash": "2857f8a16cd4450a18f8701c1c9c9f397dee4b291fefd2475279883a0f8a29de",
+    "h10_only_status": "PROPOSED_NOT_IMPLEMENTED",
+    "watch_h10_status": "PROPOSED_NOT_APPROVED"
+  },
+  "observed_date": "2026-08-13",
+  "mode": "LOCAL_CROSS_REPOSITORY_FIXTURE_VALIDATION",
+  "cloud_branch": "codex/kidsignal-gcs-realtime",
+  "cloud_commit": "fa58bb92b0f7d9d1497e05ae3bce77f3b891b643",
+  "cloud_remote_contains_commit": true,
+  "cloud_unit_tests": {
+    "command_scope": [
+      "tests.test_training_handoff",
+      "tests.test_training_feature_schema"
+    ],
+    "passed": 8,
+    "failed": 0
+  },
+  "first_cross_fixture_attempt": {
+    "status": "REJECTED_AS_EXPECTED",
+    "reason": "training capture set spans subjects",
+    "fixture_issue": "the Cloud test helper reused the same capture-session UUIDs for different subjects",
+    "contract_meaning": "one cohort-scoped sequence group must not span subjects"
+  },
+  "corrected_cross_fixture_results": [
+    {
+      "variant": "watch_only",
+      "source_set": ["watch"],
+      "feature_schema_uuid": "9b842d8c-8889-5259-acca-77baa0c7729d",
+      "feature_schema_hash": "d8314b0c329426d4b33e099a9060a3250b3954a74f4f3fd032d09ffbe3e2e43b",
+      "model_validator_status": "VALID_SELECTION_HANDOFF",
+      "training_eligible": true,
+      "serving_contract_status": "CANONICAL_CONTRACT"
+    },
+    {
+      "variant": "h10_only",
+      "source_set": ["h10"],
+      "feature_schema_uuid": "72795992-ced1-5f12-a351-6b340786a3d6",
+      "feature_schema_hash": "f2d6256362726747e59f5951af08f0c0dbf491b8f46bc00ed9c2c196c6b36485",
+      "model_validator_status": "VALID_SELECTION_HANDOFF",
+      "training_eligible": true,
+      "serving_contract_status": "CANONICAL_CONTRACT"
+    },
+    {
+      "variant": "watch_h10",
+      "source_set": ["h10", "watch"],
+      "feature_schema_uuid": "6802252a-f5ef-5a04-92ba-37378d75cd44",
+      "feature_schema_hash": "10f0be5737cea4965f8ca9552f4f8ae27154b3c195da7ff266e5703ae7d55b66",
+      "model_validator_status": "VALID_SELECTION_HANDOFF",
+      "training_eligible": true,
+      "serving_contract_status": "PROPOSED_NOT_APPROVED"
+    }
+  ],
+  "common_fixture_result": {
+    "split_counts": {"TRAIN": 1, "VALIDATION": 1},
+    "locked_rows": 0,
+    "purge_seconds": 1800,
+    "truth_state": "REVIEWED_REAL",
+    "negative_observation_code": "NO_EVENT",
+    "negative_temporal_stage_use": "AUDIT_ONLY"
+  },
+  "remaining_contract_gaps": [
+    "the authorized view is flat rows while the model validator accepts one cohort envelope plus rows; the sync adapter must group by one training_cohort_uuid and cohort_digest",
+    "cohort_digest and split_digest are generated from Cloud-internal lineage and cannot be independently recomputed from the minimum-privilege model view",
+    "the model view has window bounds but no reviewed event onset/end, so event-delay and lead-time metrics are not computable",
+    "the model view has evaluation_class but no review_disposition, so valid-non-event versus hard-negative stratified audit is not computable",
+    "live BigQuery training tables, authorized view, and a real reviewed cohort remain absent"
+  ],
+  "status": {
+    "contract_fixture_compatibility": "VERIFIED_LOCAL",
+    "live_sync": "BLOCKED_NO_FROZEN_TRAINING_VIEW",
+    "training": "NOT STARTED",
+    "evaluation": "NOT EVALUABLE",
+    "real_performance": "NOT VERIFIED"
+  }
+}

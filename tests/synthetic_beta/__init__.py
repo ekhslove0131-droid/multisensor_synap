@@ -1,0 +1,1 @@
+"""Synthetic beta contract tests."""

@@ -1,0 +1,63 @@
+{
+  "schema_version": "kidsignal-bigquery-training-readback/v1",
+  "observed_at_utc": "2026-08-12T08:52:54Z",
+  "mode": "READ_ONLY",
+  "gcp_project": "multi-app-kidsignal-260801",
+  "bigquery_authentication": "VERIFIED_READBACK",
+  "kaggle_authentication": "VERIFIED_LIST_READBACK",
+  "dataset": {
+    "id": "kidsignal_validation",
+    "location": "asia-southeast1"
+  },
+  "objects": [
+    {
+      "id": "artifact_monitoring_v1",
+      "type": "TABLE",
+      "observed_row_count": 9574,
+      "legacy_person_key_rows": 9574,
+      "distinct_loads": 9574,
+      "distinct_checksums": 9574,
+      "accuracy_rows": 0,
+      "false_positive_rate_rows": 0,
+      "residual_drift_rows": 0,
+      "streaming": true
+    },
+    {
+      "id": "model_validation_v1",
+      "type": "TABLE",
+      "observed_row_count": 0
+    }
+  ],
+  "authorized_or_materialized_training_view": "NOT FOUND",
+  "training_cohort_uuid": "NOT FOUND",
+  "cohort_digest": "NOT FOUND",
+  "independent_truth_status": "truth_not_mature",
+  "source_sets_observed": [
+    "watch",
+    "h10",
+    "h10,watch"
+  ],
+  "watch_h10_route_status": "no_model",
+  "contract_gaps": [
+    "training_cohort_uuid",
+    "cohort_digest",
+    "training_subject_uuid",
+    "source_uuid",
+    "capture_session_uuid",
+    "exact_window_id",
+    "feature_set_uuid",
+    "feature_schema_uuid",
+    "feature_schema_hash",
+    "label_uuid",
+    "label_revision_uuid",
+    "review_uuid",
+    "split_role",
+    "authorized train+validation view",
+    "sealed locked-holdout evaluator"
+  ],
+  "forbidden_current_field": "person_key",
+  "sync_status": "BLOCKED_NO_FROZEN_TRAINING_VIEW",
+  "training_status": "NOT STARTED",
+  "evaluation_status": "NOT EVALUABLE",
+  "real_accuracy_status": "NOT VERIFIED"
+}

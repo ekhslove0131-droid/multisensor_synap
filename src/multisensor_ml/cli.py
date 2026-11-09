@@ -8,6 +8,7 @@ from typing import cast
 
 import pandas as pd
 
+from multisensor_ml.beta_training.cli import configure_beta_parser, run_beta_command
 from multisensor_ml.bigquery_training_preflight import (
     active_gcloud_principal,
     run_read_only_cohort_reader,
@@ -84,6 +85,7 @@ from multisensor_ml.standard_baseline_bigquery import (
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="multisensor-ml")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    configure_beta_parser(subparsers)
 
     materialize = subparsers.add_parser("materialize-synthetic")
     materialize.add_argument("--config", type=Path, required=True)
@@ -382,6 +384,8 @@ def _emit(**payload: object) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "beta-loop":
+        return run_beta_command(args)
     if args.command == "model-platform":
         observed_at = args.observed_at_utc or datetime.now(UTC).isoformat().replace(
             "+00:00", "Z"

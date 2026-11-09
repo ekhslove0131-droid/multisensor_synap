@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "synapbridge-beta-runtime"
+version = "0.1.0"
+description = "Observed-only numeric runtime for the SynapBridge synthetic beta loop"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "numpy==2.5.1",
+  "scipy==1.18.0",
+  "onnxruntime==1.28.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/synapbridge_beta_runtime"]

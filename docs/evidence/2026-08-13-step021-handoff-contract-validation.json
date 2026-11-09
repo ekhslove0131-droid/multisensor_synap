@@ -1,0 +1,73 @@
+{
+  "schema_version": "kidsignal-step021-model-handoff-validation/v2",
+  "observed_date": "2026-08-13",
+  "scope": "LOCAL_CONTRACT_AND_CROSS_REPOSITORY_FIXTURE_ONLY",
+  "cloud_branch": "codex/kidsignal-gcs-realtime",
+  "contract_changes": {
+    "handoff_digest": "INDEPENDENTLY_RECOMPUTED",
+    "canonical_json": {
+      "encoding": "UTF-8",
+      "sort_keys": true,
+      "separators": [",", ":"],
+      "allow_nan": false
+    },
+    "review_dispositions": {
+      "TARGET_EVENT": "POSITIVE",
+      "VALID_NON_EVENT": "NEGATIVE",
+      "HARD_NEGATIVE": "NEGATIVE"
+    },
+    "negative_observation_code": "NO_EVENT",
+    "temporal_stage_use": "AUDIT_ONLY",
+    "sequence_group_key": "training_capture_set_uuid",
+    "locked_access": false
+  },
+  "runtime_schema_correction": {
+    "watch_only": {
+      "schema_version": "watch_standard_16_v2",
+      "schema_uuid": "9b842d8c-8889-5259-acca-77baa0c7729d",
+      "schema_hash": "2857f8a16cd4450a18f8701c1c9c9f397dee4b291fefd2475279883a0f8a29de",
+      "training_status": "CANONICAL_RUNTIME"
+    },
+    "platform_description_hash": "d8314b0c329426d4b33e099a9060a3250b3954a74f4f3fd032d09ffbe3e2e43b",
+    "platform_description_hash_allowed_as_runtime": false,
+    "h10_only_status": "PROPOSED_NOT_IMPLEMENTED",
+    "watch_h10_status": "PROPOSED_NOT_APPROVED"
+  },
+  "tdd": {
+    "red": [
+      "digest tampering was not rejected before implementation",
+      "review_disposition was rejected as an unknown row field",
+      "authorized BigQuery row synchronization function was absent",
+      "BigQuery contract did not expose review_disposition or event-anchor blocker"
+    ],
+    "green": {
+      "focused_model_tests": 53,
+      "focused_model_failures": 0,
+      "ruff": "PASS",
+      "mypy": "PASS"
+    }
+  },
+  "cloud_fixture_cross_check": {
+    "row_type": "Cloud-generated authorized row with BigQuery Row-compatible items() contract",
+    "source_order_reversed": true,
+    "cloud_and_model_payload_equal": true,
+    "feature_schema_hash": "2857f8a16cd4450a18f8701c1c9c9f397dee4b291fefd2475279883a0f8a29de",
+    "handoff_digest": "e84be7ebd7b3f345ce4494fbd2db8fe1b1b7df107d178218c477702f23876b47",
+    "validator_status": "VALID_SELECTION_HANDOFF",
+    "split_counts": {
+      "TRAIN": 1,
+      "VALIDATION": 1
+    }
+  },
+  "blocked_metrics": [
+    "event_delay",
+    "forecast_lead_time"
+  ],
+  "status": {
+    "local_contract": "VERIFIED",
+    "live_sync": "BLOCKED_NO_FROZEN_TRAINING_VIEW",
+    "training": "NOT STARTED",
+    "evaluation": "NOT EVALUABLE",
+    "real_performance": "NOT VERIFIED"
+  }
+}

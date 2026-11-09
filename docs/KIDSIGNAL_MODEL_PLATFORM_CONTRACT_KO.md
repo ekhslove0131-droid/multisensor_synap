@@ -1,5 +1,11 @@
 # Kidsignal 모델 플랫폼 v1
 
+> 2026-09-05: 장비별 생체 전용 표준의 최신 방향은
+> [독립 source 준비 계약](PHYSIOLOGY_SOURCE_STANDARD_PREPARATION_KO.md)을 따른다.
+> 아래 Watch motion/load 16→15 및 H10 load/quality 입력은 LEGACY CURRENT다.
+> Watch/H10/Muse 독립 표준은 장비 교집합을 요구하지 않는다. 신규 schema 승인은 별도이며
+> 기존 24/26-field consumer와 immutable hash를 최종 생체 계약으로 전용하지 않는다.
+
 ## 결론
 
 Canonical 모델 저장소는 `multisensor_ml`이고 `multisensor_synth`는 합성 truth 생성기다.

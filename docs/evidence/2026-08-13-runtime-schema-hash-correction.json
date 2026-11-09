@@ -1,0 +1,43 @@
+{
+  "schema_version": "kidsignal-runtime-schema-hash-correction/v1",
+  "observed_date": "2026-08-13",
+  "root_cause": "platform description schema SHA-256 was reused as the Cloud runtime derived-feature schema identity",
+  "authoritative_watch_runtime": {
+    "feature_schema_version": "watch_standard_16_v2",
+    "feature_schema_uuid": "9b842d8c-8889-5259-acca-77baa0c7729d",
+    "feature_schema_hash": "2857f8a16cd4450a18f8701c1c9c9f397dee4b291fefd2475279883a0f8a29de",
+    "ordered_feature_count": 16,
+    "training_status": "CANONICAL_RUNTIME"
+  },
+  "separated_description_identity": {
+    "sha256": "d8314b0c329426d4b33e099a9060a3250b3954a74f4f3fd032d09ffbe3e2e43b",
+    "allowed_for_runtime_rows": false
+  },
+  "other_variants": {
+    "h10_only": "PROPOSED_NOT_IMPLEMENTED",
+    "watch_h10": "PROPOSED_NOT_APPROVED"
+  },
+  "tdd": {
+    "red_failures": 9,
+    "green_focused_tests": 53,
+    "watch_description_hash_rejected": true,
+    "h10_training_rejected": true,
+    "watch_h10_training_rejected": true
+  },
+  "cross_check": {
+    "cloud_and_model_payload_equal": true,
+    "feature_schema_hash": "2857f8a16cd4450a18f8701c1c9c9f397dee4b291fefd2475279883a0f8a29de",
+    "handoff_digest": "e84be7ebd7b3f345ce4494fbd2db8fe1b1b7df107d178218c477702f23876b47",
+    "validator_status": "VALID_SELECTION_HANDOFF"
+  },
+  "cloud_local_note": {
+    "focused_registry_tests_passed": 14,
+    "stale_contradictory_test_errors": 1,
+    "stale_test": "test_proposed_watch_h10_schema_can_train_but_remains_nonserving_contract",
+    "cloud_repo_modified_by_model_task": false
+  },
+  "live_status": "BLOCKED_NO_FROZEN_TRAINING_VIEW",
+  "training": "NOT STARTED",
+  "evaluation": "NOT EVALUABLE",
+  "real_performance": "NOT VERIFIED"
+}

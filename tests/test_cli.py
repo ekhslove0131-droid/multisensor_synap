@@ -20,6 +20,7 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
         "factory",
         "kaggle-model",
         "availability-model",
+        "beta-loop",
         "neon-adapter",
         "observational-standard",
         "materialize-synthetic",
@@ -81,6 +82,13 @@ def test_public_cli_exposes_all_goal15_workflow_commands() -> None:
         ["monitor-v2", "run", "--config", "configs/monitoring_v2_quick.yaml"]
     )
     assert monitoring.monitoring_v2_command == "run"
+
+    beta_train = parser.parse_args([
+        "beta-loop", "train", "--dataset", "data/manifest.json",
+        "--output", "artifact", "--wire-root", "apps",
+        "--runtime-wheel", "runtime.whl", "--config", "configs/beta_loop_v1.yaml",
+    ])
+    assert str(beta_train.config) == "configs/beta_loop_v1.yaml"
 
     observational = parser.parse_args(
         [

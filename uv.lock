@@ -635,6 +635,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "scikit-learn" },
     { name = "skops" },
+    { name = "synapbridge-beta-runtime" },
 ]
 
 [package.optional-dependencies]
@@ -673,7 +674,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'cloud-run'", specifier = ">=0.115,<1" },
     { name = "lightgbm", marker = "extra == 'tree-benchmark'", specifier = ">=4.5,<5" },
     { name = "matplotlib", marker = "extra == 'tree-benchmark'", specifier = ">=3.9,<4" },
-    { name = "multisensor-synth", editable = "../multisensor_synth" },
+    { name = "multisensor-synth", editable = "../../../multisensor_synth" },
     { name = "numpy", specifier = ">=2.2,<3" },
     { name = "onnx", marker = "extra == 'onnx-serving'", specifier = ">=1.18,<2" },
     { name = "onnxmltools", marker = "extra == 'onnx-serving'", specifier = ">=1.13,<2" },
@@ -686,6 +687,7 @@ requires-dist = [
     { name = "scikit-learn", specifier = ">=1.7,<2" },
     { name = "skl2onnx", marker = "extra == 'onnx-serving'", specifier = ">=1.19,<2" },
     { name = "skops", specifier = ">=0.13,<1" },
+    { name = "synapbridge-beta-runtime", editable = "beta_runtime" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'cloud-run'", specifier = ">=0.34,<1" },
     { name = "xgboost", marker = "extra == 'tree-benchmark'", specifier = ">=2.1,<4" },
 ]
@@ -707,7 +709,7 @@ dev = [
 [[package]]
 name = "multisensor-synth"
 version = "0.1.0"
-source = { editable = "../multisensor_synth" }
+source = { editable = "../../../multisensor_synth" }
 dependencies = [
     { name = "numpy" },
     { name = "pyarrow" },
@@ -717,11 +719,14 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "neurokit2", marker = "extra == 'beta-observed'", specifier = "==0.2.13" },
     { name = "numpy", specifier = ">=2.2,<3" },
     { name = "pyarrow", specifier = ">=19,<26" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
+    { name = "synapbridge-beta-runtime", marker = "extra == 'beta-observed'", editable = "beta_runtime" },
 ]
+provides-extras = ["beta-observed"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1451,6 +1456,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/eb/e3/7c1dc7381d9f8ab7d854328ebfa884e62cb3f3d8549ddfd37c7814f42afa/starlette-1.3.1.tar.gz", hash = "sha256:05d0213193f2fbaae60e2ecb593b4add4262ad4e46536b54abe36f11a71724e0", size = 2703240, upload-time = "2026-06-12T09:23:11.602Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/bb/2799cc2ede3ed41131f8975621e7213dfc7ef4acbbaadfa440f32500c370/starlette-1.3.1-py3-none-any.whl", hash = "sha256:c7372aae11c3c3f26a42df7bd626cec2f47d03483d261d369516a615a53714c6", size = 73632, upload-time = "2026-06-12T09:23:10.017Z" },
+]
+
+[[package]]
+name = "synapbridge-beta-runtime"
+version = "0.1.0"
+source = { editable = "beta_runtime" }
+dependencies = [
+    { name = "numpy" },
+    { name = "onnxruntime" },
+    { name = "scipy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = "==2.5.1" },
+    { name = "onnxruntime", specifier = "==1.28.0" },
+    { name = "scipy", specifier = "==1.18.0" },
 ]
 
 [[package]]

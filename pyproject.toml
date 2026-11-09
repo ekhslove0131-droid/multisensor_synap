@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "multisensor-synth",
+  "synapbridge-beta-runtime",
   "numpy>=2.2,<3",
   "pandas>=2.2,<4",
   "pyarrow>=19,<26",
@@ -54,7 +55,8 @@ dev = [
 ]
 
 [tool.uv.sources]
-multisensor-synth = { path = "../multisensor_synth", editable = true }
+multisensor-synth = { path = "../../../multisensor_synth", editable = true }
+synapbridge-beta-runtime = { path = "beta_runtime", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/multisensor_ml"]
@@ -89,7 +91,11 @@ module = [
   "skl2onnx.*",
   "onnx",
   "onnx.*",
+  "onnxruntime",
+  "onnxruntime.*",
   "sklearn",
   "sklearn.*",
+  "synapbridge_beta_runtime",
+  "synapbridge_beta_runtime.*",
 ]
 ignore_missing_imports = true

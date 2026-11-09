@@ -1,0 +1,34 @@
+{
+  "schema_version": "h10-standard-13-summary-golden/v1",
+  "calculation_owner": "multisensor_ml_independent_contract_implementation",
+  "cloud_code_copied": false,
+  "recipe": {
+    "payload_schema_version": "kidsignal_polar_h10_ecg_v2",
+    "ecg_sample_count": 1300,
+    "ecg_sample_rate_hz": 130,
+    "corrected_hr_bpm": [70, 72, 74],
+    "rr_ms_callback_order": [800, 810, 790, 800, 805]
+  },
+  "canonical_payload": {
+    "bytes": 180535,
+    "sha256": "f75039ec05b80a72e60b326a5f9ab50a1c9b75c768f982b774b4522a08cd3877"
+  },
+  "model_summary": {
+    "eligible": true,
+    "eligible_seconds": 10,
+    "emission_corrected_utc_ms": 19992,
+    "hr_bpm_median": 72.0,
+    "rr_rmssd_ms": 12.5,
+    "ecg_coverage": 1.0,
+    "contact_valid_fraction": 1.0,
+    "rr_valid_fraction": 1.0,
+    "quality_confidence": 1.0,
+    "reason_codes": []
+  },
+  "cloud_comparison": {
+    "all_fields_equal": true,
+    "maximum_absolute_numeric_delta": 0.0
+  },
+  "real_data_status": "NOT VERIFIED",
+  "training_status": "BLOCKED_NO_REAL_COHORT"
+}

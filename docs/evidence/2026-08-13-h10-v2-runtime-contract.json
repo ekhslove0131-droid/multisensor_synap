@@ -1,0 +1,23 @@
+{
+  "checked_at": "2026-08-13",
+  "contract_scope": "model_owned_h10_only_feature_proposal",
+  "payload_schema_version": "kidsignal_polar_h10_ecg_v2",
+  "device_profile": "polar_h10_v1",
+  "feature_schema_version": "h10_standard_13_v1",
+  "feature_schema_uuid": "8ba3dbff-e5c4-5dd3-be1d-69ea6cea8966",
+  "feature_schema_sha256": "5ff8e9ceaa534bb8b7fafbdd7f844b06c0a4b21bb206428d5ce9239eec5459d6",
+  "canonical_json_utf8_bytes": 5873,
+  "ordered_feature_count": 13,
+  "producer_status": "PROPOSED_NOT_IMPLEMENTED",
+  "training_ready": false,
+  "real_data_status": "NOT VERIFIED",
+  "watch_h10_status": "PROPOSED_NOT_APPROVED",
+  "replaces_placeholder_hash": "f2d6256362726747e59f5951af08f0c0dbf491b8f46bc00ed9c2c196c6b36485",
+  "placeholder_hash_preserved": false,
+  "cloud_android_gcp_modified": false,
+  "canonical_json_source": "multisensor_ml.platform_contract.h10_runtime_feature_schema().canonical_json",
+  "tdd_red_evidence": "15 failed, 1 passed before implementation",
+  "focused_green_evidence": "71 passed",
+  "ruff_status": "PASS",
+  "mypy_status": "PASS"
+}

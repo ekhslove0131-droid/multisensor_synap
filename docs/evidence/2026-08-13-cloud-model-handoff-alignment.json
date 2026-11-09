@@ -1,0 +1,75 @@
+{
+  "schema_version": "kidsignal-cloud-model-handoff-alignment/v1",
+  "observed_date": "2026-08-13",
+  "mode": "READ_ONLY_CLOUD_MODEL_LOCAL_CONTRACT_UPDATE",
+  "cloud_branch": "codex/kidsignal-gcs-realtime",
+  "cloud_head": "3c5678c",
+  "reviewed_commits": [
+    "cedfe0e",
+    "746a5db",
+    "63a276d",
+    "b5a8138",
+    "3c5678c"
+  ],
+  "training_capture_set_uuid": {
+    "accepted": true,
+    "type": "canonical UUID string",
+    "scope": "training cohort",
+    "purpose": "capture continuity and sequence grouping only",
+    "identity_use": "FORBIDDEN",
+    "validation": "one capture-set UUID must map to one training_subject_uuid"
+  },
+  "compatible_fields": [
+    "training_cohort_uuid",
+    "cohort_digest",
+    "split_digest",
+    "training_subject_uuid",
+    "training_capture_set_uuid",
+    "exact_window_id",
+    "source_set",
+    "window_start_ms",
+    "window_end_ms",
+    "feature_schema_uuid",
+    "feature_schema_hash",
+    "feature_values",
+    "label_uuid",
+    "label_revision_uuid",
+    "review_uuid",
+    "evaluation_class",
+    "temporal_stage",
+    "observation_code",
+    "split_role",
+    "source_row_digest"
+  ],
+  "model_view_forbidden": [
+    "account/auth/membership/profile",
+    "direct person/source/capture/app UUID",
+    "legacy person_key",
+    "raw signals",
+    "GCS credential lineage",
+    "LOCKED rows and labels"
+  ],
+  "resolved_model_contract_changes": [
+    "replace direct source_uuid/capture_session_uuid with training_capture_set_uuid",
+    "accept millisecond window bounds and uppercase TRAIN/VALIDATION",
+    "map watch to watch_only, h10 to h10_only, h10+watch to watch_h10",
+    "require exact flat finite numeric feature object",
+    "ignore temporal_stage on NEGATIVE and use NO_EVENT"
+  ],
+  "remaining_blockers": [
+    "live training_examples_v1 is absent",
+    "live training_cohorts_v1 is absent",
+    "live authorized/materialized model view is absent",
+    "committed training-example producer/source adapter is absent",
+    "handoff does not yet carry purge_seconds >= 1800 evidence",
+    "handoff dataclass does not itself carry contract_version, split_policy, sequence_group_key, locked_access or truth_state",
+    "Cloud feature JSON validator permits structures broader than exact flat numeric model input",
+    "real reviewed frozen cohort is absent"
+  ],
+  "status": {
+    "live_sync": "BLOCKED_NO_FROZEN_TRAINING_VIEW",
+    "training": "NOT STARTED",
+    "evaluation": "NOT EVALUABLE",
+    "real_performance": "NOT VERIFIED"
+  }
+}
