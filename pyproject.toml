@@ -10,7 +10,6 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "multisensor-synth",
-  "synapbridge-beta-runtime",
   "numpy>=2.2,<3",
   "pandas>=2.2,<4",
   "pyarrow>=19,<26",
@@ -23,31 +22,10 @@ dependencies = [
 [project.scripts]
 multisensor-ml = "multisensor_ml.cli:main"
 
-[project.optional-dependencies]
-tree-benchmark = [
-    "lightgbm>=4.5,<5",
-    "matplotlib>=3.9,<4",
-    "xgboost>=2.1,<4",
-]
-onnx-serving = [
-    "onnx>=1.18,<2",
-    "onnxmltools>=1.13,<2",
-    "onnxruntime>=1.20,<2",
-    "optuna>=4.4,<5",
-    "skl2onnx>=1.19,<2",
-]
-cloud-run = [
-    "fastapi>=0.115,<1",
-    "uvicorn[standard]>=0.34,<1",
-]
-
 [dependency-groups]
 dev = [
   "hypothesis>=6.130,<7",
-  "ipykernel>=6.29,<8",
   "mypy>=1.15,<2",
-  "nbclient>=0.10,<1",
-  "nbformat>=5.10,<6",
   "pandas-stubs>=2.2,<4",
   "pytest>=8.3,<10",
   "ruff>=0.11,<1",
@@ -55,8 +33,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-multisensor-synth = { path = "../../../multisensor_synth", editable = true }
-synapbridge-beta-runtime = { path = "beta_runtime", editable = true }
+multisensor-synth = { path = "../multisensor_synth", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/multisensor_ml"]
@@ -66,7 +43,6 @@ addopts = "-ra"
 testpaths = ["tests"]
 
 [tool.ruff]
-extend-exclude = [".superpowers", "kaggle/*.ipynb"]
 line-length = 100
 target-version = "py312"
 
@@ -87,15 +63,7 @@ module = [
   "pyarrow.*",
   "skops",
   "skops.*",
-  "skl2onnx",
-  "skl2onnx.*",
-  "onnx",
-  "onnx.*",
-  "onnxruntime",
-  "onnxruntime.*",
   "sklearn",
   "sklearn.*",
-  "synapbridge_beta_runtime",
-  "synapbridge_beta_runtime.*",
 ]
 ignore_missing_imports = true

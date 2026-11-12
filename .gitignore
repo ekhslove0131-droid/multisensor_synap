@@ -10,14 +10,12 @@ __pycache__/
 *.py[cod]
 data/raw/
 data/prepared/
-data/model_ready/
 data/registry/
 data/audit/
 data/outcomes/
 data/model_registry/
 artifacts/
 output/
-dist/
 reports/generated/
 knime/workspace/
 knime/exports/
@@ -27,9 +25,3 @@ knime/exports/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-kaggle/.ipynb_checkpoints/
-kaggle/cache/
-kaggle/checkpoints/
-kaggle/wandb/
-kaggle/staging/
-wandb/

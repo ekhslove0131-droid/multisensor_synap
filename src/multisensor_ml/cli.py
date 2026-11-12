@@ -2,57 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-import pandas as pd
-
-from multisensor_ml.beta_training.cli import configure_beta_parser, run_beta_command
-from multisensor_ml.bigquery_training_preflight import (
-    active_gcloud_principal,
-    run_read_only_cohort_reader,
-    run_read_only_preflight,
-)
 from multisensor_ml.factory import run_synthetic_factory
-from multisensor_ml.kaggle_model_contracts import load_kaggle_model_package_config
-from multisensor_ml.kaggle_model_package import (
-    build_kaggle_model_package,
-    verify_kaggle_model_package,
-)
-from multisensor_ml.kaggle_reproduce import (
-    compare_expected,
-    load_hierarchical_package,
-    predict_hierarchical,
-)
 from multisensor_ml.knime import export_knime_artifacts
 from multisensor_ml.materialize import materialize_synthetic
 from multisensor_ml.model_registry import ModelRegistry, import_oracle_bundle
-from multisensor_ml.monitoring_v2 import (
-    load_monitoring_v2_config,
-    run_monitoring_v2,
-)
-from multisensor_ml.neon_adapter import (
-    derive_watch_features,
-    fit_personal_baseline_adapter,
-    personal_adapter_manifest,
-    transform_with_personal_adapter,
-)
-from multisensor_ml.observational_reference import (
-    export_training_reference_bundle,
-    verify_training_reference_bundle,
-)
-from multisensor_ml.observational_standard import (
-    export_baseline_shadow_bundle,
-    export_candidate_shadow_bundle,
-    train_observational_standard,
-    verify_baseline_shadow_bundle,
-    verify_candidate_shadow_bundle,
-)
-from multisensor_ml.phase3_pipeline import (
-    prepare_phase3_source,
-    run_phase3_from_config,
-)
 from multisensor_ml.pipeline import (
     PreparedSeries,
     evaluate_prepared_bundle,
@@ -61,31 +17,20 @@ from multisensor_ml.pipeline import (
 )
 from multisensor_ml.receipts import validate_stage_receipt
 from multisensor_ml.registry_workflow import (
-    RegistryRunResult,
     export_registry_knime_tables,
     run_registry_all,
     run_registry_stage,
 )
-from multisensor_ml.sensor_availability import (
-    AVAILABILITY_PROFILES,
-    build_sensor_availability_package,
-    verify_sensor_availability_package,
-)
 from multisensor_ml.settings import (
     load_factory_config,
     load_goal15_config,
-    load_phase3_config,
     load_training_registry_config,
-)
-from multisensor_ml.standard_baseline_bigquery import (
-    run_read_only_standard_cohort_reader,
 )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="multisensor-ml")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    configure_beta_parser(subparsers)
 
     materialize = subparsers.add_parser("materialize-synthetic")
     materialize.add_argument("--config", type=Path, required=True)
@@ -191,181 +136,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_all = subparsers.add_parser("run-all")
     run_all.add_argument("--config", type=Path, required=True)
-
-    onnx = subparsers.add_parser("onnx")
-    onnx_commands = onnx.add_subparsers(dest="onnx_command", required=True)
-    onnx_tune = onnx_commands.add_parser("tune")
-    onnx_tune.add_argument("--project-root", type=Path, required=True)
-    onnx_tune.add_argument("--series", default="mvp3-oracle-v1")
-    onnx_tune.add_argument(
-        "--output",
-        type=Path,
-        default=Path("services/onnx_api/models/goal15-final-v1"),
-    )
-    onnx_tune.add_argument("--trials", type=int, default=12)
-    onnx_tune.add_argument("--max-train-rows", type=int, default=600_000)
-    onnx_tune.add_argument("--max-validation-rows", type=int, default=120_000)
-    onnx_tune.add_argument("--seed", type=int, default=20260725)
-
-    monitoring_v2 = subparsers.add_parser("monitor-v2")
-    monitoring_v2_commands = monitoring_v2.add_subparsers(
-        dest="monitoring_v2_command", required=True
-    )
-    monitoring_v2_run = monitoring_v2_commands.add_parser("run")
-    monitoring_v2_run.add_argument("--config", type=Path, required=True)
-
-    kaggle_model = subparsers.add_parser("kaggle-model")
-    kaggle_model_commands = kaggle_model.add_subparsers(
-        dest="kaggle_model_command", required=True
-    )
-    kaggle_package = kaggle_model_commands.add_parser("package")
-    kaggle_package.add_argument("--config", type=Path, required=True)
-    kaggle_package.add_argument("--wheel", type=Path, required=True)
-    kaggle_package.add_argument("--source-project-root", type=Path)
-    kaggle_verify = kaggle_model_commands.add_parser("verify")
-    kaggle_verify.add_argument("--package", type=Path, required=True)
-    kaggle_reproduce = kaggle_model_commands.add_parser("reproduce")
-    kaggle_reproduce.add_argument("--model-root", type=Path, required=True)
-    kaggle_reproduce.add_argument("--input", type=Path, required=True)
-    kaggle_reproduce.add_argument("--output", type=Path, required=True)
-    kaggle_reproduce.add_argument("--expected", type=Path)
-
-    availability_model = subparsers.add_parser("availability-model")
-    availability_commands = availability_model.add_subparsers(
-        dest="availability_model_command", required=True
-    )
-    availability_package = availability_commands.add_parser("package")
-    availability_package.add_argument("--project-root", type=Path, default=Path.cwd())
-    availability_package.add_argument("--series", required=True)
-    availability_package.add_argument("--output", type=Path, required=True)
-    availability_package.add_argument("--wheel", type=Path)
-    availability_package.add_argument("--max-rows-per-person", type=int, default=20_000)
-    availability_verify = availability_commands.add_parser("verify")
-    availability_verify.add_argument("--package", type=Path, required=True)
-
-    neon_adapter = subparsers.add_parser("neon-adapter")
-    neon_adapter_commands = neon_adapter.add_subparsers(
-        dest="neon_adapter_command", required=True
-    )
-    neon_derive = neon_adapter_commands.add_parser("derive")
-    neon_derive.add_argument("--input", type=Path, required=True)
-    neon_derive.add_argument("--output", type=Path, required=True)
-    neon_derive.add_argument("--clock-offset-ms", type=float)
-    neon_derive.add_argument("--physiological-lag-ms", type=float)
-    neon_fit = neon_adapter_commands.add_parser("fit")
-    neon_fit.add_argument("--input", type=Path, required=True)
-    neon_fit.add_argument("--output", type=Path, required=True)
-    neon_fit.add_argument("--person-id", required=True)
-    neon_fit.add_argument("--model-version", default="hierarchical-v5")
-    neon_fit.add_argument("--warmup-seconds", type=int, default=1800)
-    neon_fit.add_argument("--weight-cap", type=float, default=0.75)
-
-    observational = subparsers.add_parser(
-        "observational-standard",
-        help="train the separate corrected-UTC 30-minute observational standard model",
-    )
-    observational_commands = observational.add_subparsers(
-        dest="observational_command", required=True
-    )
-    observational_train = observational_commands.add_parser("train")
-    observational_train.add_argument("--input", type=Path, required=True)
-    observational_train.add_argument("--output", type=Path, required=True)
-    observational_train.add_argument(
-        "--source-domain",
-        choices=("real_observed", "synthetic_truth_oracle"),
-        required=True,
-    )
-    observational_train.add_argument("--seed", type=int, default=20260804)
-    observational_train.add_argument("--hgb-max-iter", type=int, default=120)
-    observational_train.add_argument("--overwrite", action="store_true")
-    observational_export = observational_commands.add_parser("export-baseline-shadow")
-    observational_export.add_argument("--output", type=Path, required=True)
-    observational_export.add_argument("--overwrite", action="store_true")
-    observational_verify = observational_commands.add_parser("verify-baseline-shadow")
-    observational_verify.add_argument("--bundle", type=Path, required=True)
-    observational_candidate = observational_commands.add_parser(
-        "export-candidate-shadow"
-    )
-    observational_candidate.add_argument("--input", type=Path, required=True)
-    observational_candidate.add_argument("--output", type=Path, required=True)
-    observational_candidate.add_argument("--active-bundle", type=Path)
-    observational_candidate.add_argument(
-        "--candidate",
-        choices=("ridge", "elasticnet", "hist_gradient_boosting"),
-        default="ridge",
-    )
-    observational_candidate.add_argument(
-        "--source-domain",
-        choices=("real_observed", "synthetic_truth_oracle"),
-        default="synthetic_truth_oracle",
-    )
-    observational_candidate.add_argument("--seed", type=int, default=20260806)
-    observational_candidate.add_argument("--hgb-max-iter", type=int, default=120)
-    observational_candidate_verify = observational_commands.add_parser(
-        "verify-candidate-shadow"
-    )
-    observational_candidate_verify.add_argument("--bundle", type=Path, required=True)
-    observational_reference = observational_commands.add_parser(
-        "export-training-reference"
-    )
-    observational_reference.add_argument("--input", type=Path, required=True)
-    observational_reference.add_argument(
-        "--candidate-bundle", type=Path, required=True
-    )
-    observational_reference.add_argument("--output", type=Path, required=True)
-    observational_reference.add_argument("--generated-at", required=True)
-    observational_reference_verify = observational_commands.add_parser(
-        "verify-training-reference"
-    )
-    observational_reference_verify.add_argument("--bundle", type=Path, required=True)
-
-    model_platform = subparsers.add_parser("model-platform")
-    model_platform_commands = model_platform.add_subparsers(
-        dest="model_platform_command", required=True
-    )
-    model_platform_preflight = model_platform_commands.add_parser(
-        "preflight-bigquery"
-    )
-    model_platform_preflight.add_argument(
-        "--output-receipt", type=Path, required=True
-    )
-    model_platform_preflight.add_argument("--observed-at-utc")
-    model_platform_cohort = model_platform_commands.add_parser(
-        "read-bigquery-cohort"
-    )
-    model_platform_cohort.add_argument("--training-cohort-uuid", required=True)
-    model_platform_cohort.add_argument(
-        "--expected-public-cohort-digest", required=True
-    )
-    model_platform_cohort.add_argument(
-        "--expected-public-split-digest", required=True
-    )
-    model_platform_cohort.add_argument(
-        "--output-receipt", type=Path, required=True
-    )
-    model_platform_cohort.add_argument("--observed-at-utc")
-    model_platform_standard_cohort = model_platform_commands.add_parser(
-        "read-standard-bigquery-cohort"
-    )
-    model_platform_standard_cohort.add_argument(
-        "--standard-cohort-uuid", required=True
-    )
-    model_platform_standard_cohort.add_argument(
-        "--expected-public-cohort-digest", required=True
-    )
-    model_platform_standard_cohort.add_argument(
-        "--expected-public-split-digest", required=True
-    )
-    model_platform_standard_cohort.add_argument(
-        "--output-receipt", type=Path, required=True
-    )
-    model_platform_standard_cohort.add_argument("--observed-at-utc")
-
-    phase3 = subparsers.add_parser("phase3")
-    phase3_commands = phase3.add_subparsers(dest="phase3_command", required=True)
-    for phase3_command in ("prepare", "train-validate", "report-input"):
-        command_parser = phase3_commands.add_parser(phase3_command)
-        command_parser.add_argument("--config", type=Path, required=True)
     return parser
 
 
@@ -384,354 +154,6 @@ def _emit(**payload: object) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.command == "beta-loop":
-        return run_beta_command(args)
-    if args.command == "model-platform":
-        observed_at = args.observed_at_utc or datetime.now(UTC).isoformat().replace(
-            "+00:00", "Z"
-        )
-        principal = active_gcloud_principal()
-        if args.model_platform_command == "preflight-bigquery":
-            preflight_receipt = run_read_only_preflight(
-                args.output_receipt,
-                observed_at_utc=observed_at,
-                observed_principal=principal,
-            )
-            _emit(
-                status=preflight_receipt["status"],
-                authorized_view=preflight_receipt["authorized_view"],
-                observed_row_count=preflight_receipt["observed_row_count"],
-                model_reader_identity_verified=preflight_receipt[
-                    "model_reader_identity_verified"
-                ],
-                receipt=str(args.output_receipt.resolve()),
-                training_status=preflight_receipt["training_status"],
-                evaluation_status=preflight_receipt["evaluation_status"],
-            )
-            return (
-                0
-                if preflight_receipt["status"] == "READY_FOR_EXPLICIT_COHORT_SYNC"
-                else 2
-            )
-        if args.model_platform_command == "read-bigquery-cohort":
-            cohort_receipt = run_read_only_cohort_reader(
-                args.output_receipt,
-                training_cohort_uuid=args.training_cohort_uuid,
-                expected_public_cohort_digest=args.expected_public_cohort_digest,
-                expected_public_split_digest=args.expected_public_split_digest,
-                observed_at_utc=observed_at,
-                observed_principal=principal,
-            )
-            _emit(
-                status=cohort_receipt["status"],
-                training_cohort_uuid=cohort_receipt["training_cohort_uuid"],
-                row_count=cohort_receipt["row_count"],
-                training_ready=cohort_receipt["training_ready"],
-                receipt=str(args.output_receipt.resolve()),
-            )
-            return 0 if cohort_receipt["training_ready"] is True else 2
-        if args.model_platform_command == "read-standard-bigquery-cohort":
-            standard_receipt = run_read_only_standard_cohort_reader(
-                args.output_receipt,
-                standard_cohort_uuid=args.standard_cohort_uuid,
-                expected_public_cohort_digest=args.expected_public_cohort_digest,
-                expected_public_split_digest=args.expected_public_split_digest,
-                observed_at_utc=observed_at,
-                observed_principal=principal,
-            )
-            _emit(
-                status=standard_receipt["status"],
-                standard_cohort_uuid=standard_receipt["standard_cohort_uuid"],
-                row_count=standard_receipt["row_count"],
-                training_ready=standard_receipt["training_ready"],
-                fit_call_count=standard_receipt["fit_call_count"],
-                training_status=standard_receipt["training_status"],
-                evaluation_status=standard_receipt["evaluation_status"],
-                receipt=str(args.output_receipt.resolve()),
-            )
-            return 0 if standard_receipt["training_ready"] is True else 2
-        raise AssertionError(
-            f"unhandled model-platform command: {args.model_platform_command}"
-        )
-    if args.command == "onnx":
-        if args.onnx_command != "tune":
-            raise AssertionError(f"unhandled ONNX command: {args.onnx_command}")
-        from multisensor_ml.optuna_dual_sensor import (
-            DualSensorTuningConfig,
-            tune_dual_sensor_models,
-        )
-
-        tuning_config = DualSensorTuningConfig(
-            project_root=args.project_root,
-            series_id=args.series,
-            output_root=args.output,
-            n_trials=args.trials,
-            max_train_rows=args.max_train_rows,
-            max_validation_rows=args.max_validation_rows,
-            seed=args.seed,
-        )
-        result = tune_dual_sensor_models(tuning_config)
-        _emit(
-            status=result["status"],
-            output=str(args.output.resolve()),
-            variants=list(cast(list[object], result["variants"])),
-            primary_metric=result["primary_metric"],
-            data_status=result["model_scope"],
-            real_data_status=result["real_data_status"],
-            locked_test_read=result["locked_test_read"],
-        )
-        return 0
-
-    if args.command == "monitor-v2":
-        if args.monitoring_v2_command != "run":
-            raise AssertionError(f"unhandled monitoring-v2 command: {args.monitoring_v2_command}")
-        monitoring_config = load_monitoring_v2_config(args.config)
-        monitoring_result = run_monitoring_v2(monitoring_config)
-        _emit(
-            status="TRAINED",
-            dataset_root=str(monitoring_result.dataset_root),
-            artifact_root=str(monitoring_result.artifact_root),
-            bundles=[str(path) for path in monitoring_result.bundles],
-            report_json=str(monitoring_result.report_json),
-            data_status="oracle/sanity",
-            real_data_status="NOT VERIFIED",
-            locked_test_read=False,
-        )
-        return 0
-    if args.command == "kaggle-model":
-        if args.kaggle_model_command == "package":
-            config = load_kaggle_model_package_config(args.config)
-            if args.source_project_root is not None:
-                config = config.model_copy(
-                    update={"project_root": args.source_project_root.resolve()}
-                )
-            package = build_kaggle_model_package(config, args.wheel)
-            verified = verify_kaggle_model_package(package.root)
-            _emit(
-                status="PACKAGED",
-                package_root=str(package.root),
-                archive_sha256=verified["archive_sha256"],
-                locked_test_read=False,
-            )
-            return 0
-        if args.kaggle_model_command == "verify":
-            verified = verify_kaggle_model_package(args.package)
-            _emit(
-                status="VERIFIED",
-                archive_sha256=verified["archive_sha256"],
-                reproduction_status=verified["reproduction_status"],
-                locked_test_read=False,
-            )
-            return 0
-        if args.kaggle_model_command == "reproduce":
-            model_root = args.model_root.resolve()
-            if not (model_root / "payload_manifest.json").is_file():
-                model_root = model_root / "extracted"
-            loaded_package = load_hierarchical_package(model_root)
-            frame = pd.read_parquet(args.input)
-            prediction = predict_hierarchical(loaded_package, frame)
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            prediction.to_parquet(args.output, index=False)
-            if args.expected is None:
-                _emit(
-                    status="PREDICTED",
-                    rows=len(prediction),
-                    output=str(args.output.resolve()),
-                    locked_test_read=False,
-                )
-                return 0
-            comparison = compare_expected(
-                prediction, pd.read_parquet(args.expected)
-            )
-            _emit(
-                status=comparison.status,
-                compared_rows=comparison.compared_rows,
-                first_mismatch_column=comparison.first_mismatch_column,
-                first_mismatch_key=comparison.first_mismatch_key,
-                output=str(args.output.resolve()),
-                locked_test_read=False,
-            )
-            return 0 if comparison.status == "REPRODUCED" else 1
-        raise AssertionError(
-            f"unhandled Kaggle model command: {args.kaggle_model_command}"
-        )
-
-    if args.command == "availability-model":
-        if args.availability_model_command == "package":
-            package_root = build_sensor_availability_package(
-                args.project_root.resolve(),
-                series_id=args.series,
-                output_root=args.output,
-                max_rows_per_person=args.max_rows_per_person,
-                wheel_path=args.wheel,
-            )
-            verified = verify_sensor_availability_package(package_root)
-            _emit(
-                status="PACKAGED",
-                package_root=str(package_root),
-                archive_sha256=verified["archive_sha256"],
-                profiles=list(AVAILABILITY_PROFILES),
-                locked_test_read=False,
-                data_status="oracle/sanity",
-                real_data_status="NOT VERIFIED",
-            )
-            return 0
-        if args.availability_model_command == "verify":
-            verified = verify_sensor_availability_package(args.package.resolve())
-            _emit(
-                status="VERIFIED",
-                archive_sha256=verified["archive_sha256"],
-                profiles=verified["profile_ids"],
-                locked_test_read=False,
-                data_status="oracle/sanity",
-                real_data_status="NOT VERIFIED",
-            )
-            return 0
-        raise AssertionError(
-            f"unhandled availability model command: {args.availability_model_command}"
-        )
-
-    if args.command == "neon-adapter":
-        if args.neon_adapter_command == "derive":
-            mapped = pd.read_parquet(args.input)
-            derived = derive_watch_features(
-                mapped,
-                clock_offset_ms=args.clock_offset_ms,
-                physiological_lag_ms=args.physiological_lag_ms,
-            )
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            derived.to_parquet(args.output, index=False)
-            _emit(
-                status="DERIVED_OBSERVED_ONLY",
-                rows=len(derived),
-                output=str(args.output.resolve()),
-                model_ready=False,
-                real_data_status="NOT VERIFIED",
-            )
-            return 0
-        if args.neon_adapter_command == "fit":
-            observed = pd.read_parquet(args.input)
-            adapter = fit_personal_baseline_adapter(
-                observed,
-                person_id=args.person_id,
-                warmup_seconds=args.warmup_seconds,
-                weight_cap=args.weight_cap,
-            )
-            transformed = transform_with_personal_adapter(observed, adapter)
-            manifest = personal_adapter_manifest(adapter, model_version=args.model_version)
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            transformed_path = args.output.with_name(args.output.stem + "__transformed.parquet")
-            transformed.to_parquet(transformed_path, index=False)
-            _emit(
-                status=adapter.status,
-                manifest=str(args.output.resolve()),
-                transformed=str(transformed_path.resolve()),
-                personal_weight=adapter.personal_weight,
-                model_weights_changed=False,
-                promotable=False,
-                real_data_status="NOT VERIFIED",
-            )
-            return 0
-        raise AssertionError(
-            f"unhandled Neon adapter command: {args.neon_adapter_command}"
-        )
-
-    if args.command == "observational-standard":
-        if args.observational_command == "train":
-            result = train_observational_standard(
-                args.input,
-                args.output,
-                source_domain=args.source_domain,
-                random_state=args.seed,
-                hgb_max_iter=args.hgb_max_iter,
-                overwrite=args.overwrite,
-            )
-            _emit(
-                status=result["status"],
-                artifact=str(args.output.resolve()),
-                model_version=result["model_version"],
-                selected_candidate=result["selected_candidate"],
-                data_scope=result["data_scope"],
-                real_data_status=result["real_data_status"],
-                locked_test_read=result["locked_test_read"],
-            )
-            return 0 if result["status"] == "TRAINED" else 2
-        if args.observational_command == "export-baseline-shadow":
-            result = export_baseline_shadow_bundle(
-                args.output,
-                overwrite=args.overwrite,
-            )
-            _emit(
-                status="EXPORTED_BASELINE_SHADOW",
-                artifact=str(args.output.resolve()),
-                model_release=result["model_release"],
-                feature_schema_hash=result["feature_schema_hash"],
-                real_data_status=result["real_data_status"],
-                stage=result["stage"],
-            )
-            return 0
-        if args.observational_command == "verify-baseline-shadow":
-            result = verify_baseline_shadow_bundle(args.bundle)
-            _emit(**result)
-            return 0
-        if args.observational_command == "export-candidate-shadow":
-            result = export_candidate_shadow_bundle(
-                args.input,
-                args.output,
-                active_bundle=args.active_bundle,
-                candidate_name=args.candidate,
-                source_domain=args.source_domain,
-                random_state=args.seed,
-                hgb_max_iter=args.hgb_max_iter,
-            )
-            _emit(
-                status="EXPORTED_CANDIDATE_SHADOW",
-                artifact=str(args.output.resolve()),
-                model_release=result["model_release"],
-                candidate_algorithm=result["candidate_algorithm"],
-                model_artifact_sha256=result["model_artifact_sha256"],
-                feature_schema_hash=result["feature_schema_hash"],
-                real_data_status=result["real_data_status"],
-                stage=result["stage"],
-                thresholds=result["thresholds"],
-                delivery_eligible=result["delivery_eligible"],
-            )
-            return 0
-        if args.observational_command == "verify-candidate-shadow":
-            result = verify_candidate_shadow_bundle(args.bundle)
-            _emit(**result)
-            return 0
-        if args.observational_command == "export-training-reference":
-            result = export_training_reference_bundle(
-                args.input,
-                args.candidate_bundle,
-                args.output,
-                generated_at=args.generated_at,
-            )
-            _emit(
-                status="EXPORTED_TRAINING_REFERENCE",
-                artifact=str(args.output.resolve()),
-                reference_release=result["reference_release"],
-                reference_method=result["reference_method"],
-                reference_artifact_sha256=result["reference_artifact_sha256"],
-                training_split_digest=result["training_split_digest"],
-                persistence_training_mae=result["persistence_training_mae"],
-                thresholds=result["thresholds"],
-                stage=result["stage"],
-            )
-            return 0
-        if args.observational_command == "verify-training-reference":
-            result = verify_training_reference_bundle(args.bundle)
-            _emit(**result)
-            return 0
-        raise AssertionError(
-            f"unhandled observational-standard command: {args.observational_command}"
-        )
-
     if args.command == "factory":
         if args.factory_command == "run":
             factory_config = load_factory_config(args.config)
@@ -814,14 +236,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.registry_command == "run-all":
             registry_config = load_training_registry_config(args.config)
-            registry_result: RegistryRunResult = run_registry_all(registry_config)
+            result = run_registry_all(registry_config)
             _emit(
-                status=registry_result.status,
+                status=result.status,
                 real_data_status="NOT VERIFIED",
-                run_id=registry_result.run_id,
-                series_id=registry_result.series_id,
-                release_id=registry_result.release_id,
-                final_receipt=str(registry_result.final_receipt.resolve()),
+                run_id=result.run_id,
+                series_id=result.series_id,
+                release_id=result.release_id,
+                final_receipt=str(result.final_receipt.resolve()),
             )
             return 0
         if args.registry_command == "compare":
@@ -877,35 +299,6 @@ def main(argv: list[str] | None = None) -> int:
         registered = materialize_synthetic(goal_config)
         _emit(series_id=registered.series_id, registry=str(registered.registry_dir))
         return 0
-
-    if args.command == "phase3":
-        phase3_config = load_phase3_config(args.config)
-        if args.phase3_command == "prepare":
-            source = prepare_phase3_source(phase3_config)
-            _emit(
-                status="PREPARED",
-                data_status="oracle/sanity",
-                locked_test_read=False,
-                source=str(source),
-            )
-            return 0
-        if args.phase3_command == "train-validate":
-            phase3_result = run_phase3_from_config(phase3_config)
-            _emit(
-                status="VALIDATED",
-                data_status="oracle/sanity",
-                real_accuracy_status="NOT VERIFIED",
-                locked_test_read=False,
-                manifest=str(phase3_result.manifest_json),
-            )
-            return 0
-        if args.phase3_command == "report-input":
-            phase3_manifest = phase3_config.artifact_root / "result" / "phase3_manifest.json"
-            if not phase3_manifest.exists():
-                raise FileNotFoundError("run 'phase3 train-validate' before report-input")
-            _emit(status="READY", manifest=str(phase3_manifest))
-            return 0
-        raise AssertionError(f"unhandled Phase 3 command: {args.phase3_command}")
 
     if args.command == "prepare":
         project = args.project_root.resolve()

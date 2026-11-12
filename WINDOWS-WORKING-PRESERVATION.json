@@ -1,0 +1,99 @@
+{
+  "project": "multisensor_ml",
+  "parent_publication_branch": "preserve/20261109-multisensor-ml-publication-redacted",
+  "parent_sha": "e6cc73f7cf263aa5ff94ee4efd39d6563c1e591a",
+  "source_changes": [
+    {
+      "path": ".gitignore",
+      "source_sha256": "6461b7a96e36e57587c8c4dbc6876bce2ff003263e24d26366012b1a62688b43",
+      "published_sha256": "6461b7a96e36e57587c8c4dbc6876bce2ff003263e24d26366012b1a62688b43",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "README.md",
+      "source_sha256": "974c5ae045d1d50185847f7ac65625922b25d50b8065bae00c5d84d719edb24e",
+      "published_sha256": "974c5ae045d1d50185847f7ac65625922b25d50b8065bae00c5d84d719edb24e",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "source_sha256": "4030da15977b0a8cfa5226e608b74fb733bfbdf2553687eee58b30f80c95c617",
+      "published_sha256": "4030da15977b0a8cfa5226e608b74fb733bfbdf2553687eee58b30f80c95c617",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "docs/RESULTS_HIERARCHICAL_MVP3.md",
+      "source_sha256": "7cb808d623acdb028926cd24d896c2d38b29c91808a47a5fb1b0cbd3aa22463d",
+      "published_sha256": "7cb808d623acdb028926cd24d896c2d38b29c91808a47a5fb1b0cbd3aa22463d",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "pyproject.toml",
+      "source_sha256": "5eca0daa1f7b942c940735a0c379d61611cf504a62b12fcdc07e0caebdaff74d",
+      "published_sha256": "5eca0daa1f7b942c940735a0c379d61611cf504a62b12fcdc07e0caebdaff74d",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "src/multisensor_ml/cli.py",
+      "source_sha256": "9cbf37fd1e5ca5013a33c89c188df39ccc0eb26917aa7f1cf47d2bddc52729a5",
+      "published_sha256": "9cbf37fd1e5ca5013a33c89c188df39ccc0eb26917aa7f1cf47d2bddc52729a5",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "src/multisensor_ml/contracts.py",
+      "source_sha256": "3de88d5f26b8a9532ef329900c1879992249940f95ed2f4078c7f490dc2d2f05",
+      "published_sha256": "3de88d5f26b8a9532ef329900c1879992249940f95ed2f4078c7f490dc2d2f05",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "src/multisensor_ml/features.py",
+      "source_sha256": "1ca8d43cdf8b2f9aac50e1f87d135002df3736048428758682964c76c5cf02ad",
+      "published_sha256": "1ca8d43cdf8b2f9aac50e1f87d135002df3736048428758682964c76c5cf02ad",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "src/multisensor_ml/metrics.py",
+      "source_sha256": "6795d05f8c14674d31db5ebd446a6e38565ea2c5c24dcc536f8ac3bd70d72c87",
+      "published_sha256": "6795d05f8c14674d31db5ebd446a6e38565ea2c5c24dcc536f8ac3bd70d72c87",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "src/multisensor_ml/settings.py",
+      "source_sha256": "d44bca01ba72261e5f8daafbe1875c94e298d2ecb53ef0c332043d8fdeebec2b",
+      "published_sha256": "d44bca01ba72261e5f8daafbe1875c94e298d2ecb53ef0c332043d8fdeebec2b",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "tests/test_baseline_features.py",
+      "source_sha256": "8119a3b208d807cecc7148fdf654b901ff0a6d29d3e9c5349d55d41f7d0c353b",
+      "published_sha256": "8119a3b208d807cecc7148fdf654b901ff0a6d29d3e9c5349d55d41f7d0c353b",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "tests/test_cli.py",
+      "source_sha256": "cbaaa58786d21a4bdc5534fbf8b855293996652b62ec660e6b09583190bfd14b",
+      "published_sha256": "cbaaa58786d21a4bdc5534fbf8b855293996652b62ec660e6b09583190bfd14b",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "tests/test_contracts.py",
+      "source_sha256": "ae9efdc555c6ac204b8db3d767a10c0985d70534b44027a056771b4eab2f7eb8",
+      "published_sha256": "ae9efdc555c6ac204b8db3d767a10c0985d70534b44027a056771b4eab2f7eb8",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "tests/test_models_metrics.py",
+      "source_sha256": "af9798be1cace093ecdc936cad7a2ed39ed74dc80e2c38fef685f4317210a3d7",
+      "published_sha256": "af9798be1cace093ecdc936cad7a2ed39ed74dc80e2c38fef685f4317210a3d7",
+      "credential_url_userinfo_removed": false
+    },
+    {
+      "path": "uv.lock",
+      "source_sha256": "e91517eeaa51f621e787ed565f901b019ba5f5654a9dca826a995067e5e035f6",
+      "published_sha256": "e91517eeaa51f621e787ed565f901b019ba5f5654a9dca826a995067e5e035f6",
+      "credential_url_userinfo_removed": false
+    }
+  ],
+  "source_files_unchanged": true,
+  "excluded": "Runtime logs, generated evidence, third-party SDK redistribution, local private settings and binary personal documents remain in local backups."
+}
